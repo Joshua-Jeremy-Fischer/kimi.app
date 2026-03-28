@@ -1,0 +1,32 @@
+# ── Secrets ───────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Node (npm) — Backend unter backend/ ────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+# package-lock.json bewusst COMMITTEN (reproduzierbare Docker-/npm ci Builds)
+
+# ── Runtime / lokal generiert ─────────────────────────────
+.fim_hashes.json
+
+# ── Logs & OS ─────────────────────────────────────────────
+*.log
+.DS_Store
+Thumbs.db
+
+# ── IDE (optional entfernen, wenn ihr Settings teilen wollt) ─
+.idea/
+*.swp
+*.swo
+
+# ── Künftige Frontend-Builds (Vite/React) — anpassen wenn aktiv ─
+# frontend/dist/
+# frontend/build/
+
+# frontend/public/ NICHT ignorieren — Dockerfile: COPY public → Nginx
+# (Ignorieren nur sinnvoll, wenn public/ per CI/Multi-Stage im Image erzeugt wird.)

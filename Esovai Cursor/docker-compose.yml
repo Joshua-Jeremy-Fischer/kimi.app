@@ -1,0 +1,59 @@
+# Kimi-Stack ohne eigenen cloudflared — Tunnel „esovai-mcp“.
+# Öffentlich: https://kamikimi.esovai.tech → nur kimi-frontend:80 (Nginx proxy’t /api + /health → kimi-backend:3010).
+# Nach docker compose up: nur kimi-frontend ins Netz des MCP-cloudflared hängen, z. B.:
+#   docker network connect <NETZNAME> kimi-frontend
+
+version: "3.8"
+
+services:
+  backend:
+    build: ./backend
+    container_name: kimi-backend
+    restart: unless-stopped
+    env_file: .env
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=10m,mode=1777
+    networks:
+      - app-net
+
+  frontend:
+    build: ./frontend
+    container_name: kimi-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    read_only: true
+    cap_drop: [ALL]
+    # Port 80 < 1024: ohne NET_BIND_SERVICE startet nginx mit cap_drop ALL nicht zuverlässig
+    cap_add: [NET_BIND_SERVICE]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=10m,mode=1777
+      - /var/cache/nginx:size=50m,mode=0755
+      - /var/run:size=1m,mode=0755
+    networks:
+      - app-net
+
+  ollama:
+    image: ollama/ollama
+    container_name: ollama
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - app-net
+
+networks:
+  app-net:
+    driver: bridge
+
+volumes:
+  ollama_data:
