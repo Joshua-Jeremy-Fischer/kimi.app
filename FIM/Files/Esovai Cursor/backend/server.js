@@ -2,7 +2,7 @@ import express from "express";
 import OpenAI from "openai";
 import cors from "cors";
 import helmet from "helmet";
-import rateLimit from "express-rate-limit";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import crypto from "crypto";
 import fs from "fs";
 import { fileURLToPath } from "url";
@@ -95,18 +95,13 @@ app.use((req, res, next) => {
   next();
 });
 
-// Rate Limit — CVE-2026-30827 Fix: safeKeyGenerator
-function safeKeyGenerator(req) {
-  const ip = req.ip || req.socket.remoteAddress || "unknown";
-  return ip.startsWith("::ffff:") ? ip.substring(7) : ip; // IPv4-mapped IPv6 → reine IPv4
-}
-
+// Rate Limit — CVE-2026-30827 Fix: ipKeyGenerator (eingebaut in express-rate-limit ^8.3.0)
 app.use("/api/chat", rateLimit({
   windowMs: 60_000,
   max: 10,
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: safeKeyGenerator,
+  keyGenerator: ipKeyGenerator,
 }));
 
 // Chat Endpoint
