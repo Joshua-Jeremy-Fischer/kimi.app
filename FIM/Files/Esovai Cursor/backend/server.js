@@ -2,7 +2,7 @@ import express from "express";
 import OpenAI from "openai";
 import cors from "cors";
 import helmet from "helmet";
-import rateLimit, { ipKeyGenerator } from "express-rate-limit";
+import rateLimit from "express-rate-limit";
 import crypto from "crypto";
 import fs from "fs";
 import { fileURLToPath } from "url";
@@ -39,11 +39,8 @@ const PROVIDER_REGISTRY = {
     baseURL: () => process.env.GROQ_BASE_URL    || "https://api.groq.com/openai/v1",
     model:   () => process.env.GROQ_MODEL       || "llama-3.3-70b-versatile",
   },
-  anthropic: {
-    apiKey:  () => process.env.ANTHROPIC_API_KEY  || "",
-    baseURL: () => process.env.ANTHROPIC_BASE_URL || "https://api.anthropic.com/v1",
-    model:   () => process.env.ANTHROPIC_MODEL    || "claude-3-5-sonnet-20241022",
-  },
+  // HINWEIS: Anthropic nutzt /v1/messages (kein OpenAI-Format) — noch nicht unterstützt
+  // anthropic: { ... },
 };
 
 const VALID_PROVIDERS = new Set(Object.keys(PROVIDER_REGISTRY));
@@ -112,8 +109,16 @@ fimCheck();
 function getProviderClient(providerName) {
   if (!VALID_PROVIDERS.has(providerName)) return null;
   const cfg = PROVIDER_REGISTRY[providerName];
+  const apiKey = cfg.apiKey();
+  // Prüfen ob Key vorhanden (außer ollama, das keinen Key braucht)
+  if (providerName !== "ollama" && providerName !== "github-copilot" && !apiKey) {
+    return { error: `API Key für Provider "${providerName}" fehlt in .env` };
+  }
+  if (providerName === "github-copilot" && !apiKey) {
+    return { error: "GitHub Copilot nicht verbunden — zuerst /auth/github aufrufen" };
+  }
   return {
-    client: new OpenAI({ apiKey: cfg.apiKey(), baseURL: cfg.baseURL() }),
+    client: new OpenAI({ apiKey, baseURL: cfg.baseURL() }),
     model:  cfg.model(),
   };
 }
@@ -152,12 +157,12 @@ app.use((req, res, next) => {
 });
 
 // 4. Rate Limit auf /api/chat — CVE-2026-30827 Fix
+// Standard-keyGenerator von express-rate-limit ≥8.3 (inkl. CVE-2026-30827-Fix für IPv4-mapped IPv6)
 app.use("/api/chat", rateLimit({
   windowMs: 60_000,
   max: 20,
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: ipKeyGenerator,
 }));
 
 // 5. Provider Info Endpoints
@@ -183,6 +188,7 @@ app.post("/api/chat", async (req, res) => {
   const providerName = req.headers["x-provider"] || DEFAULT_PROVIDER;
   const pc = getProviderClient(providerName);
   if (!pc) return res.status(400).json({ error: `Unbekannter Provider: ${providerName}` });
+  if (pc.error) return res.status(400).json({ error: pc.error });
 
   const { messages, system } = req.body;
   const max_tokens = Math.min(req.body.max_tokens ?? 1000, 4000);
