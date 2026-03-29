@@ -1,0 +1,16 @@
+{
+  "name": "Eso Bot",
+  "short_name": "Eso Bot",
+  "description": "Esovai AI Assistant",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0a0a",
+  "theme_color": "#f5c518",
+  "icons": [
+    {
+      "src": "/favicon.ico",
+      "sizes": "64x64",
+      "type": "image/x-icon"
+    }
+  ]
+}
