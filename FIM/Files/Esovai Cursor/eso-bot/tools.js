@@ -6,46 +6,94 @@ import { can } from "./permissions.js";
 
 const execFileAsync = promisify(execFile);
 
-// ── Workspace Root — alles außerhalb ist verboten ────────────
+// ── Workspace Root ────────────────────────────────────────────
 const WORKSPACE = process.env.SANDBOX_ROOT || "/workspace";
 
-// Pfad-Traversal Schutz: immer auf WORKSPACE einschränken
+// Pfad-Traversal Schutz
 function safePath(rel) {
   const resolved = path.resolve(WORKSPACE, rel.replace(/^\/+/, ""));
-  if (!resolved.startsWith(WORKSPACE)) {
+  if (!resolved.startsWith(WORKSPACE + path.sep) && resolved !== WORKSPACE) {
     throw new Error(`Pfad außerhalb Workspace verboten: ${rel}`);
   }
   return resolved;
 }
 
-// URL-Sicherheitscheck: keine lokalen Adressen, kein file://
+// SSRF-Schutz: blockiert localhost, private Ranges, cloud metadata
 function safeUrl(url) {
   let parsed;
   try { parsed = new URL(url); } catch { throw new Error(`Ungültige URL: ${url}`); }
+
   if (!["https:", "http:"].includes(parsed.protocol)) {
     throw new Error(`Protokoll nicht erlaubt: ${parsed.protocol}`);
   }
+
   const host = parsed.hostname.toLowerCase();
-  const blocked = ["localhost", "127.0.0.1", "0.0.0.0", "::1", "169.254"];
-  if (blocked.some(b => host.includes(b))) {
-    throw new Error(`Lokale Adressen verboten: ${host}`);
+
+  // Literale Hostnamen
+  const blockedHosts = ["localhost", "127.0.0.1", "0.0.0.0", "::1", "::ffff:127.0.0.1"];
+  if (blockedHosts.includes(host)) throw new Error(`Blockierte Adresse: ${host}`);
+
+  // IP-Range Check
+  const ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (ipv4) {
+    const [, a, b, c, d] = ipv4.map(Number);
+    if (
+      a === 10 ||                                    // 10.0.0.0/8
+      (a === 172 && b >= 16 && b <= 31) ||           // 172.16.0.0/12
+      (a === 192 && b === 168) ||                    // 192.168.0.0/16
+      (a === 169 && b === 254) ||                    // 169.254.0.0/16 (link-local / metadata)
+      (a === 100 && b >= 64 && b <= 127) ||          // 100.64.0.0/10 (shared address space)
+      a === 127 ||                                   // 127.0.0.0/8
+      a === 0 ||                                     // 0.0.0.0/8
+      (a === 198 && (b === 18 || b === 19)) ||       // 198.18.0.0/15 (benchmark)
+      (a === 203 && b === 0 && c === 113) ||         // 203.0.113.0/24 (documentation)
+      a >= 224                                       // multicast + reserved
+    ) {
+      throw new Error(`Private/reservierte IP verboten: ${host}`);
+    }
   }
+
+  // Metadata-Dienste
+  if (host.includes("169.254") || host.includes("metadata") || host.includes("internal")) {
+    throw new Error(`Metadata/interne Adressen verboten: ${host}`);
+  }
+
   return url;
 }
 
-// ── Tool Definitionen (OpenAI format) ────────────────────────
+// Git-Subkommando Whitelist (verhindert Shell-Injection über git_op)
+const GIT_ALLOWED_SUBCMDS = new Set([
+  "status", "diff", "log", "show", "add", "commit", "push", "pull",
+  "fetch", "clone", "checkout", "branch", "merge", "rebase", "stash",
+  "tag", "remote", "init", "reset", "revert",
+]);
+
+function parseGitArgs(argsString) {
+  // Rudimentäres Shell-Split (keine Pipe, kein ;, kein &&)
+  if (/[;&|`$]/.test(argsString)) {
+    throw new Error(`Shell-Metazeichen in git-Argumenten verboten`);
+  }
+  const parts = argsString.trim().split(/\s+/);
+  const subcmd = parts[0];
+  if (!GIT_ALLOWED_SUBCMDS.has(subcmd)) {
+    throw new Error(`Git-Subkommando nicht erlaubt: ${subcmd}`);
+  }
+  return parts; // ["status"] oder ["commit", "-m", "msg"]
+}
+
+// ── Tool Definitionen ────────────────────────────────────────
 export const TOOL_DEFINITIONS = [
   {
     type: "function",
     function: {
       name: "web_fetch",
-      description: "Ruft eine URL ab und gibt den Textinhalt zurück. Nur HTTPS/HTTP erlaubt, keine lokalen Adressen.",
+      description: "Ruft eine URL ab. Nur HTTPS/HTTP, keine lokalen/privaten Adressen.",
       parameters: {
         type: "object",
         properties: {
-          url:    { type: "string", description: "Die URL die abgerufen werden soll" },
+          url:    { type: "string" },
           method: { type: "string", enum: ["GET", "POST"], default: "GET" },
-          body:   { type: "string", description: "Request Body für POST (optional)" },
+          body:   { type: "string" },
         },
         required: ["url"],
       },
@@ -55,12 +103,10 @@ export const TOOL_DEFINITIONS = [
     type: "function",
     function: {
       name: "file_read",
-      description: "Liest eine Datei aus dem Workspace. Pfad relativ zu /workspace.",
+      description: "Liest eine Datei aus /workspace.",
       parameters: {
         type: "object",
-        properties: {
-          path: { type: "string", description: "Dateipfad relativ zu /workspace" },
-        },
+        properties: { path: { type: "string" } },
         required: ["path"],
       },
     },
@@ -69,12 +115,12 @@ export const TOOL_DEFINITIONS = [
     type: "function",
     function: {
       name: "file_write",
-      description: "Schreibt oder überschreibt eine Datei im Workspace.",
+      description: "Schreibt eine Datei in /workspace.",
       parameters: {
         type: "object",
         properties: {
-          path:    { type: "string", description: "Dateipfad relativ zu /workspace" },
-          content: { type: "string", description: "Dateiinhalt" },
+          path:    { type: "string" },
+          content: { type: "string" },
         },
         required: ["path", "content"],
       },
@@ -84,12 +130,10 @@ export const TOOL_DEFINITIONS = [
     type: "function",
     function: {
       name: "list_files",
-      description: "Listet Dateien in einem Workspace-Verzeichnis auf.",
+      description: "Listet Dateien in einem /workspace Verzeichnis.",
       parameters: {
         type: "object",
-        properties: {
-          path: { type: "string", description: "Verzeichnispfad relativ zu /workspace", default: "/" },
-        },
+        properties: { path: { type: "string", default: "/" } },
       },
     },
   },
@@ -97,12 +141,12 @@ export const TOOL_DEFINITIONS = [
     type: "function",
     function: {
       name: "shell_exec",
-      description: "Führt einen Shell-Befehl im Workspace aus. Erfordert ALLOW_SHELL=true.",
+      description: "Führt Shell-Befehl in /workspace aus. Nur wenn ALLOW_SHELL=true.",
       parameters: {
         type: "object",
         properties: {
-          command: { type: "string", description: "Shell-Befehl (z.B. 'npm install', 'node script.js')" },
-          cwd:     { type: "string", description: "Arbeitsverzeichnis relativ zu /workspace", default: "/" },
+          command: { type: "string" },
+          cwd:     { type: "string", default: "/" },
         },
         required: ["command"],
       },
@@ -112,11 +156,11 @@ export const TOOL_DEFINITIONS = [
     type: "function",
     function: {
       name: "git_op",
-      description: "Führt Git-Operationen aus (status, diff, commit, push). Erfordert ALLOW_GIT=true.",
+      description: "Git-Operationen (status/diff/add/commit/push etc.). Nur wenn ALLOW_GIT=true.",
       parameters: {
         type: "object",
         properties: {
-          args: { type: "string", description: "Git-Argumente (z.B. 'status', 'add -A', 'commit -m \"msg\"')" },
+          args: { type: "string", description: "z.B. 'status', 'add -A', 'commit -m msg'" },
         },
         required: ["args"],
       },
@@ -129,9 +173,8 @@ export async function executeTool(name, args) {
   const log = (msg) => console.log(`[TOOL:${name}] ${msg}`);
 
   switch (name) {
-    // ── web_fetch ───────────────────────────────────────────
     case "web_fetch": {
-      if (!can("web")) return { error: "Web-Zugriff ist deaktiviert (ALLOW_WEB=false)" };
+      if (!can("web")) return { error: "Web-Zugriff deaktiviert" };
       const url = safeUrl(args.url);
       log(url);
       const res = await fetch(url, {
@@ -141,25 +184,19 @@ export async function executeTool(name, args) {
         signal: AbortSignal.timeout(10_000),
       });
       const text = await res.text();
-      return {
-        status: res.status,
-        content: text.slice(0, 8000), // max 8k Zeichen
-        truncated: text.length > 8000,
-      };
+      return { status: res.status, content: text.slice(0, 8000), truncated: text.length > 8000 };
     }
 
-    // ── file_read ───────────────────────────────────────────
     case "file_read": {
-      if (!can("files")) return { error: "Dateizugriff ist deaktiviert (ALLOW_FILES=false)" };
+      if (!can("files")) return { error: "Dateizugriff deaktiviert" };
       const p = safePath(args.path);
       log(p);
       const content = await fs.readFile(p, "utf-8");
       return { content: content.slice(0, 16000), truncated: content.length > 16000 };
     }
 
-    // ── file_write ──────────────────────────────────────────
     case "file_write": {
-      if (!can("files")) return { error: "Dateizugriff ist deaktiviert (ALLOW_FILES=false)" };
+      if (!can("files")) return { error: "Dateizugriff deaktiviert" };
       const p = safePath(args.path);
       log(p);
       await fs.mkdir(path.dirname(p), { recursive: true });
@@ -167,50 +204,32 @@ export async function executeTool(name, args) {
       return { ok: true, path: args.path, bytes: Buffer.byteLength(args.content) };
     }
 
-    // ── list_files ──────────────────────────────────────────
     case "list_files": {
-      if (!can("files")) return { error: "Dateizugriff ist deaktiviert (ALLOW_FILES=false)" };
+      if (!can("files")) return { error: "Dateizugriff deaktiviert" };
       const p = safePath(args.path || "/");
       log(p);
       const entries = await fs.readdir(p, { withFileTypes: true });
-      return {
-        path: args.path || "/",
-        entries: entries.map(e => ({
-          name: e.name,
-          type: e.isDirectory() ? "dir" : "file",
-        })),
-      };
+      return { path: args.path || "/", entries: entries.map(e => ({ name: e.name, type: e.isDirectory() ? "dir" : "file" })) };
     }
 
-    // ── shell_exec ──────────────────────────────────────────
     case "shell_exec": {
-      if (!can("shell")) return { error: "Shell ist deaktiviert. In den Eso Bot Settings aktivieren." };
+      if (!can("shell")) return { error: "Shell deaktiviert. In Eso Bot Settings aktivieren." };
       const cwd = safePath(args.cwd || "/");
       log(`${args.command} (cwd: ${cwd})`);
-
-      // Befehl als Shell-String ausführen (voller Bash-Zugriff wenn ALLOW_SHELL=true)
       const { stdout, stderr } = await execFileAsync("bash", ["-c", args.command], {
         cwd,
-        timeout: 30_000,      // max 30 Sekunden
-        maxBuffer: 1024 * 512, // max 512kb Output
-        env: {
-          ...process.env,
-          HOME: WORKSPACE,
-          PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-        },
+        timeout: 30_000,
+        maxBuffer: 1024 * 512,
+        env: { ...process.env, HOME: WORKSPACE, PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" },
       });
-      return {
-        stdout: stdout.slice(0, 8000),
-        stderr: stderr.slice(0, 2000),
-        truncated: stdout.length > 8000,
-      };
+      return { stdout: stdout.slice(0, 8000), stderr: stderr.slice(0, 2000), truncated: stdout.length > 8000 };
     }
 
-    // ── git_op ──────────────────────────────────────────────
     case "git_op": {
-      if (!can("git")) return { error: "Git ist deaktiviert. In den Eso Bot Settings aktivieren." };
-      log(args.args);
-      const { stdout, stderr } = await execFileAsync("bash", ["-c", `git ${args.args}`], {
+      if (!can("git")) return { error: "Git deaktiviert. In Eso Bot Settings aktivieren." };
+      const gitArgs = parseGitArgs(args.args); // wirft bei Injection-Versuch
+      log(gitArgs.join(" "));
+      const { stdout, stderr } = await execFileAsync("git", gitArgs, {
         cwd: WORKSPACE,
         timeout: 30_000,
         maxBuffer: 1024 * 256,
@@ -223,14 +242,13 @@ export async function executeTool(name, args) {
   }
 }
 
-// Gibt nur Tools zurück die aktuell erlaubt sind
 export function getActiveTools() {
   return TOOL_DEFINITIONS.filter(t => {
     const n = t.function.name;
     if (n === "web_fetch")  return can("web");
     if (n === "shell_exec") return can("shell");
     if (n === "git_op")     return can("git");
-    if (n === "file_read" || n === "file_write" || n === "list_files") return can("files");
+    if (["file_read", "file_write", "list_files"].includes(n)) return can("files");
     return true;
   });
 }

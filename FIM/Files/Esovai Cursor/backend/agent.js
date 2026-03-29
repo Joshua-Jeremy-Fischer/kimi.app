@@ -1,6 +1,7 @@
 import express from "express";
 
-const ESO_BOT_BASE = process.env.AGENT_BASE_URL || "http://eso-bot:3020";
+const ESO_BOT_BASE  = process.env.AGENT_BASE_URL  || "http://eso-bot:3020";
+const ESO_BOT_TOKEN = process.env.ESO_BOT_TOKEN  || "";
 
 export function createAgentRouter() {
   const router = express.Router();
@@ -16,7 +17,10 @@ export function createAgentRouter() {
     try {
       const response = await fetch(`${ESO_BOT_BASE}/task`, {
         method:  "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type":  "application/json",
+          ...(ESO_BOT_TOKEN ? { "Authorization": `Bearer ${ESO_BOT_TOKEN}` } : {}),
+        },
         body:    JSON.stringify({ messages, system, maxIterations, model }),
         signal:  AbortSignal.timeout(120_000), // 2 Minuten max
       });
@@ -33,23 +37,28 @@ export function createAgentRouter() {
     }
   });
 
-  // GET /api/agent/permissions — aktuelle Permissions lesen
+  // GET /api/agent/permissions
   router.get("/permissions", async (_req, res) => {
     try {
-      const response = await fetch(`${ESO_BOT_BASE}/permissions`);
+      const response = await fetch(`${ESO_BOT_BASE}/permissions`, {
+        headers: { ...(ESO_BOT_TOKEN ? { "Authorization": `Bearer ${ESO_BOT_TOKEN}` } : {}) },
+      });
       res.json(await response.json());
     } catch (err) {
       res.status(502).json({ error: "Eso Bot nicht erreichbar" });
     }
   });
 
-  // POST /api/agent/permissions — Permissions live ändern
+  // POST /api/agent/permissions
   router.post("/permissions", async (req, res) => {
     try {
       const response = await fetch(`${ESO_BOT_BASE}/permissions`, {
         method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify(req.body),
+        headers: {
+          "Content-Type": "application/json",
+          ...(ESO_BOT_TOKEN ? { "Authorization": `Bearer ${ESO_BOT_TOKEN}` } : {}),
+        },
+        body: JSON.stringify(req.body),
       });
       res.json(await response.json());
     } catch (err) {
