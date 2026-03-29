@@ -1,0 +1,14 @@
+{
+  "name": "eso-bot",
+  "version": "1.0.0",
+  "description": "ESOVAI autonomous agent with permission control",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "openai": "^4.103.0"
+  }
+}

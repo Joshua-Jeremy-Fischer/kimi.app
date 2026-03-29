@@ -1,103 +1,59 @@
 import express from "express";
 
-const AGENT_BASE  = process.env.AGENT_BASE_URL    || "http://kimi-agent:3020";
-const AGENT_TOKEN = process.env.AGENT_BEARER_TOKEN || "";
+const ESO_BOT_BASE = process.env.AGENT_BASE_URL || "http://eso-bot:3020";
 
 export function createAgentRouter() {
   const router = express.Router();
 
-  // POST /api/agent — Task erstellen + starten
+  // POST /api/agent — Task an Eso Bot übergeben
   router.post("/", async (req, res) => {
-    if (!AGENT_TOKEN) {
-      return res.status(503).json({ error: "Agent nicht konfiguriert (AGENT_BEARER_TOKEN fehlt)" });
-    }
+    const { messages, system, maxIterations, model } = req.body;
 
-    const { prompt, allowed_tools, autonomy } = req.body;
-    if (!prompt || typeof prompt !== "string" || !prompt.trim()) {
-      return res.status(400).json({ error: "prompt fehlt" });
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return res.status(400).json({ error: "messages[] fehlt oder leer" });
     }
 
     try {
-      const createRes = await fetch(`${AGENT_BASE}/tasks`, {
+      const response = await fetch(`${ESO_BOT_BASE}/task`, {
         method:  "POST",
-        headers: {
-          "Content-Type":  "application/json",
-          "Authorization": `Bearer ${AGENT_TOKEN}`,
-        },
-        body: JSON.stringify({ prompt, allowed_tools, autonomy }),
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ messages, system, maxIterations, model }),
+        signal:  AbortSignal.timeout(120_000), // 2 Minuten max
       });
 
-      if (!createRes.ok) {
-        const err = await createRes.json().catch(() => ({}));
-        return res.status(createRes.status).json({ error: err.error || "Agent-Fehler beim Erstellen" });
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        return res.status(response.status).json({ error: err.error || "Eso Bot Fehler" });
       }
 
-      const { id } = await createRes.json();
-
-      // Task starten (fire-and-forget)
-      fetch(`${AGENT_BASE}/tasks/${id}/run`, {
-        method:  "POST",
-        headers: { "Authorization": `Bearer ${AGENT_TOKEN}` },
-      }).catch(() => {});
-
-      res.status(202).json({ taskId: id, status: "running" });
+      res.json(await response.json());
     } catch (err) {
-      console.error("Agent proxy error:", err.message);
-      res.status(502).json({ error: "Agent-Dienst nicht erreichbar" });
+      console.error("[AGENT PROXY]", err.message);
+      res.status(502).json({ error: "Eso Bot nicht erreichbar" });
     }
   });
 
-  // GET /api/agent/:taskId/status — Task-Status abfragen
-  router.get("/:taskId/status", async (req, res) => {
-    if (!AGENT_TOKEN) {
-      return res.status(503).json({ error: "Agent nicht konfiguriert" });
-    }
-
+  // GET /api/agent/permissions — aktuelle Permissions lesen
+  router.get("/permissions", async (_req, res) => {
     try {
-      const taskRes = await fetch(`${AGENT_BASE}/tasks/${req.params.taskId}`, {
-        headers: { "Authorization": `Bearer ${AGENT_TOKEN}` },
-      });
-
-      if (!taskRes.ok) {
-        const err = await taskRes.json().catch(() => ({}));
-        return res.status(taskRes.status).json({ error: err.error || "Task nicht gefunden" });
-      }
-
-      const task = await taskRes.json();
-      res.json({
-        taskId:      task.id,
-        status:      task.status,
-        result:      task.result_text  ?? null,
-        error:       task.error_text   ?? null,
-        pendingTool: task.pending_tool ?? null,
-        createdAt:   task.created_at,
-        updatedAt:   task.updated_at,
-      });
+      const response = await fetch(`${ESO_BOT_BASE}/permissions`);
+      res.json(await response.json());
     } catch (err) {
-      console.error("Agent status error:", err.message);
-      res.status(502).json({ error: "Agent-Dienst nicht erreichbar" });
+      res.status(502).json({ error: "Eso Bot nicht erreichbar" });
     }
   });
 
-  // GET /api/agent — alle Tasks auflisten
-  router.get("/", async (req, res) => {
-    if (!AGENT_TOKEN) {
-      return res.status(503).json({ error: "Agent nicht konfiguriert" });
-    }
-
+  // POST /api/agent/permissions — Permissions live ändern
+  router.post("/permissions", async (req, res) => {
     try {
-      const listRes = await fetch(`${AGENT_BASE}/tasks`, {
-        headers: { "Authorization": `Bearer ${AGENT_TOKEN}` },
+      const response = await fetch(`${ESO_BOT_BASE}/permissions`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify(req.body),
       });
-
-      if (!listRes.ok) {
-        return res.status(listRes.status).json({ error: "Tasks konnten nicht geladen werden" });
-      }
-
-      res.json(await listRes.json());
+      res.json(await response.json());
     } catch (err) {
-      console.error("Agent list error:", err.message);
-      res.status(502).json({ error: "Agent-Dienst nicht erreichbar" });
+      res.status(502).json({ error: "Eso Bot nicht erreichbar" });
     }
   });
 

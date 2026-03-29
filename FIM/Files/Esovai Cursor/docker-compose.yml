@@ -37,21 +37,25 @@ services:
     networks:
       - app-net
 
-  kimi-agent:
-    build: ./kimi-agent
-    container_name: kimi-agent
+  eso-bot:
+    build: ./eso-bot
+    container_name: eso-bot
     restart: unless-stopped
     env_file: .env
     environment:
-      SANDBOX_ROOT: /app/sandbox
-      AGENT_DB_PATH: /app/data/agent.db
       AGENT_PORT: "3020"
-      ALLOW_WEB_SEARCH: "false"
-      ALLOW_SHELL_EXEC: "false"
+      SANDBOX_ROOT: /workspace
+      LLM_BASE_URL: "http://ollama:11434/v1"
+      LLM_API_KEY: "ollama"
+      LLM_MODEL: "kimi-k2.5:cloud"
+      ALLOW_SHELL: "false"
+      ALLOW_WEB: "true"
+      ALLOW_FILES: "true"
+      ALLOW_GIT: "false"
     volumes:
-      - kimi_agent_data:/app/data
-      - kimi_agent_sandbox:/app/sandbox
+      - eso_workspace:/workspace
     cap_drop: [ALL]
+    cap_add: []
     security_opt:
       - no-new-privileges:true
     networks:
@@ -75,5 +79,4 @@ networks:
 
 volumes:
   ollama_data:
-  kimi_agent_data:
-  kimi_agent_sandbox:
+  eso_workspace:
