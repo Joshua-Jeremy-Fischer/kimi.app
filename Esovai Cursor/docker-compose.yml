@@ -19,7 +19,10 @@ services:
       - app-net
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        ALLOWED_TOKEN: ${ALLOWED_TOKEN}   # aus .env → in nginx.conf eingebettet
     container_name: kimi-frontend
     restart: unless-stopped
     depends_on:
