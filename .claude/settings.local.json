@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/Users/joshf/AppData/Roaming/**)",
+      "Read(//c//**)",
+      "Read(//c/Users/joshf/AppData/Local/**)",
+      "Read(//c/Users/joshf/kimikami/dist//**)",
+      "Read(//c/Users/joshf/kimikami/dist/assets//**)",
+      "Read(//c/Users/joshf/kimikami/**)",
+      "Bash(PATH=\"/c/Program Files/nodejs:$PATH\" \"/c/Program Files/nodejs/npm.cmd\" run build)"
+    ]
+  }
+}

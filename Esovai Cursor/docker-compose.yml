@@ -9,12 +9,15 @@ services:
     container_name: kimi-backend
     restart: unless-stopped
     env_file: .env
-    read_only: true
     cap_drop: [ALL]
     security_opt:
       - no-new-privileges:true
     tmpfs:
       - /tmp:size=10m,mode=1777
+    environment:
+      DB_PATH: /data/kimi.db
+    volumes:
+      - kimi_data:/data
     networks:
       - app-net
 
@@ -85,3 +88,4 @@ networks:
 volumes:
   ollama_data:
   eso_workspace:
+  kimi_data:
