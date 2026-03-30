@@ -1,11 +1,11 @@
 {
   "name": "Eso Bot",
   "short_name": "Eso Bot",
-  "description": "Esovai AI Assistant",
+  "description": "KimiKami AI Chat",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0a0a0a",
-  "theme_color": "#f5c518",
+  "background_color": "#0d0d0d",
+  "theme_color": "#0d0d0d",
   "icons": [
     {
       "src": "/favicon.ico",

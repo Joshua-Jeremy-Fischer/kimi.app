@@ -10,17 +10,46 @@ import path from "path";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// ── Startup Env-Check ─────────────────────────────────────
-const PROVIDER = process.env.LLM_PROVIDER || "nvidia";
+// ── Provider Registry ─────────────────────────────────────
+// ollama  = default (self-hosted, no API key needed)
+// opencode-go = Mitglied-Option (requires OPENCODE_API_KEY)
+// nvidia  = optional cloud fallback (requires NVIDIA_API_KEY)
+const PROVIDER_REGISTRY = {
+  ollama: {
+    getApiKey: () => "ollama",
+    baseURL: "http://ollama:11434/v1",
+    getModel: () => process.env.OLLAMA_MODEL || "kimi-k2.5:cloud",
+    requiresEnv: null,
+  },
+  "opencode-go": {
+    getApiKey: () => process.env.OPENCODE_API_KEY,
+    baseURL: process.env.OPENCODE_BASE_URL || "https://api.opencode.ai/v1",
+    getModel: () => process.env.OPENCODE_MODEL || "kimi-k2.5",
+    requiresEnv: "OPENCODE_API_KEY",
+  },
+  nvidia: {
+    getApiKey: () => process.env.NVIDIA_API_KEY,
+    baseURL: "https://integrate.api.nvidia.com/v1",
+    getModel: () => process.env.NVIDIA_MODEL || "moonshotai/kimi-k2-instruct-0905",
+    requiresEnv: "NVIDIA_API_KEY",
+  },
+};
 
+const DEFAULT_PROVIDER = process.env.DEFAULT_PROVIDER || "ollama";
+
+// ── Startup Env-Check ─────────────────────────────────────
 const REQUIRED_ENV = ["ALLOWED_TOKEN", "FRONTEND_ORIGIN"];
-if (PROVIDER === "nvidia") REQUIRED_ENV.push("NVIDIA_API_KEY"); // nur bei nvidia nötig
 
 for (const key of REQUIRED_ENV) {
   if (!process.env[key]) {
     console.error(`FATAL: "${key}" fehlt in .env — Server startet nicht.`);
     process.exit(1);
   }
+}
+
+if (!(DEFAULT_PROVIDER in PROVIDER_REGISTRY)) {
+  console.error(`FATAL: DEFAULT_PROVIDER="${DEFAULT_PROVIDER}" nicht in Registry.`);
+  process.exit(1);
 }
 
 // ── FIM-Check ─────────────────────────────────────────────
@@ -49,19 +78,7 @@ function fimCheck() {
   console.log("FIM: OK ✓");
 }
 
-fimCheck(); // ← wird aufgerufen
-
-// ── Provider Setup ────────────────────────────────────────
-const client = new OpenAI({
-  apiKey: PROVIDER === "nvidia" ? process.env.NVIDIA_API_KEY : "ollama",
-  baseURL: PROVIDER === "nvidia"
-    ? "https://integrate.api.nvidia.com/v1"
-    : "http://ollama:11434/v1",
-});
-
-const MODEL = PROVIDER === "nvidia"
-  ? (process.env.NVIDIA_MODEL || "moonshotai/kimi-k2-instruct-0905")
-  : (process.env.OLLAMA_MODEL || "llama3.1:8b");
+fimCheck();
 
 // ── Express ───────────────────────────────────────────────
 const app = express();
@@ -95,7 +112,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// Rate Limit — CVE-2026-30827 Fix: safeKeyGenerator
+// Rate Limit
 function safeKeyGenerator(req) {
   const ip = req.ip || req.socket.remoteAddress || "unknown";
   return ip.startsWith("::ffff:") ? ip.substring(7) : ip; // IPv4-mapped IPv6 → reine IPv4
@@ -109,10 +126,28 @@ app.use("/api/chat", rateLimit({
   keyGenerator: safeKeyGenerator,
 }));
 
+// Providers-Endpoint — zeigt verfügbare Provider (ohne API-Keys)
+app.get("/api/providers", (_req, res) => {
+  const available = Object.entries(PROVIDER_REGISTRY)
+    .filter(([, cfg]) => !cfg.requiresEnv || process.env[cfg.requiresEnv])
+    .map(([name, cfg]) => ({ name, model: cfg.getModel(), isDefault: name === DEFAULT_PROVIDER }));
+  res.json({ providers: available, default: DEFAULT_PROVIDER });
+});
+
 // Chat Endpoint
 app.post("/api/chat", async (req, res) => {
   const { messages, system } = req.body;
   const max_tokens = Math.min(req.body.max_tokens ?? 1000, 4000);
+
+  // Provider aus Request, Fallback auf Default
+  const requestedProvider = req.body.provider ?? DEFAULT_PROVIDER;
+  const providerName = (requestedProvider in PROVIDER_REGISTRY) ? requestedProvider : DEFAULT_PROVIDER;
+  const providerCfg = PROVIDER_REGISTRY[providerName];
+
+  // API-Key prüfen falls nötig
+  if (providerCfg.requiresEnv && !process.env[providerCfg.requiresEnv]) {
+    return res.status(503).json({ error: `Provider "${providerName}" nicht konfiguriert.` });
+  }
 
   if (!Array.isArray(messages) || messages.length === 0) {
     return res.status(400).json({ error: "messages[] fehlt oder leer" });
@@ -123,9 +158,17 @@ app.post("/api/chat", async (req, res) => {
     }
   }
 
+  // Modell: Request kann Modell überschreiben, sonst Registry-Default
+  const model = req.body.model ?? providerCfg.getModel();
+
+  const client = new OpenAI({
+    apiKey: providerCfg.getApiKey(),
+    baseURL: providerCfg.baseURL,
+  });
+
   try {
     const response = await client.chat.completions.create({
-      model: MODEL,
+      model,
       messages: [
         system ? { role: "system", content: system } : null,
         ...messages,
@@ -136,13 +179,15 @@ app.post("/api/chat", async (req, res) => {
     res.json({
       content: response.choices[0].message.content,
       usage: response.usage,
+      provider: providerName,
+      model,
     });
   } catch (err) {
-    console.error("LLM Error:", err.message);
-    res.status(500).json({ error: "Interner Fehler" });
+    console.error(`LLM Error [${providerName}/${model}]:`, err.message);
+    res.status(500).json({ error: err.message || "Interner Fehler" });
   }
 });
 
 app.listen(process.env.PORT || 3010, () =>
-  console.log(`✓ Backend | Provider: ${PROVIDER} | Model: ${MODEL}`)
+  console.log(`✓ Backend | Default-Provider: ${DEFAULT_PROVIDER} | Model: ${PROVIDER_REGISTRY[DEFAULT_PROVIDER].getModel()}`)
 );
