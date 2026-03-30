@@ -134,17 +134,21 @@ app.get("/api/providers", (_req, res) => {
   res.json({ providers: available, default: DEFAULT_PROVIDER });
 });
 
+// ── Helper: resolve provider from request ─────────────────
+function resolveProvider(req) {
+  // Frontend sends X-Provider header; body.provider as fallback
+  const requested = req.headers["x-provider"] ?? req.body.provider ?? DEFAULT_PROVIDER;
+  const name = (requested in PROVIDER_REGISTRY) ? requested : DEFAULT_PROVIDER;
+  return { name, cfg: PROVIDER_REGISTRY[name] };
+}
+
 // Chat Endpoint
 app.post("/api/chat", async (req, res) => {
   const { messages, system } = req.body;
   const max_tokens = Math.min(req.body.max_tokens ?? 1000, 4000);
 
-  // Provider aus Request, Fallback auf Default
-  const requestedProvider = req.body.provider ?? DEFAULT_PROVIDER;
-  const providerName = (requestedProvider in PROVIDER_REGISTRY) ? requestedProvider : DEFAULT_PROVIDER;
-  const providerCfg = PROVIDER_REGISTRY[providerName];
+  const { name: providerName, cfg: providerCfg } = resolveProvider(req);
 
-  // API-Key prüfen falls nötig
   if (providerCfg.requiresEnv && !process.env[providerCfg.requiresEnv]) {
     return res.status(503).json({ error: `Provider "${providerName}" nicht konfiguriert.` });
   }
@@ -158,13 +162,10 @@ app.post("/api/chat", async (req, res) => {
     }
   }
 
-  // Modell: Request kann Modell überschreiben, sonst Registry-Default
-  const model = req.body.model ?? providerCfg.getModel();
+  // X-Model header überschreibt Registry-Default
+  const model = req.headers["x-model"] ?? req.body.model ?? providerCfg.getModel();
 
-  const client = new OpenAI({
-    apiKey: providerCfg.getApiKey(),
-    baseURL: providerCfg.baseURL,
-  });
+  const client = new OpenAI({ apiKey: providerCfg.getApiKey(), baseURL: providerCfg.baseURL });
 
   try {
     const response = await client.chat.completions.create({
@@ -185,6 +186,72 @@ app.post("/api/chat", async (req, res) => {
   } catch (err) {
     console.error(`LLM Error [${providerName}/${model}]:`, err.message);
     res.status(500).json({ error: err.message || "Interner Fehler" });
+  }
+});
+
+// ── Flashcards Endpoint ───────────────────────────────────
+app.use("/api/flashcards", rateLimit({ windowMs: 60_000, max: 10, standardHeaders: true, legacyHeaders: false, keyGenerator: safeKeyGenerator }));
+
+app.post("/api/flashcards", async (req, res) => {
+  const { text } = req.body;
+  if (!text?.trim()) return res.status(400).json({ error: "text fehlt", cards: [] });
+
+  const cfg = PROVIDER_REGISTRY[DEFAULT_PROVIDER];
+  const client = new OpenAI({ apiKey: cfg.getApiKey(), baseURL: cfg.baseURL });
+
+  try {
+    const response = await client.chat.completions.create({
+      model: cfg.getModel(),
+      messages: [{
+        role: "user",
+        content: `Erstelle aus dem folgenden Text Lernkarteikarten als Frage/Antwort-Paare. Antworte NUR mit validem JSON, kein Text davor oder danach:\n{"cards":[{"question":"...","answer":"..."}]}\n\nText:\n${text.slice(0, 4000)}`,
+      }],
+      max_tokens: 2000,
+    });
+
+    const raw = response.choices[0].message.content || "";
+    const match = raw.match(/\{[\s\S]*\}/);
+    if (!match) return res.status(500).json({ error: "KI hat kein JSON geliefert", cards: [] });
+
+    const data = JSON.parse(match[0]);
+    res.json({ cards: Array.isArray(data.cards) ? data.cards : [] });
+  } catch (err) {
+    console.error("Flashcards Error:", err.message);
+    res.status(500).json({ error: err.message, cards: [] });
+  }
+});
+
+// ── GitHub Copilot OAuth Device-Flow Proxy ────────────────
+const COPILOT_CLIENT_ID = process.env.GITHUB_COPILOT_CLIENT_ID || "Iv1.b507a08c87ecfe98";
+
+app.post("/api/copilot-auth", async (req, res) => {
+  const { action, device_code } = req.body;
+  try {
+    if (action === "start") {
+      const r = await fetch("https://github.com/login/device/code", {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ client_id: COPILOT_CLIENT_ID, scope: "copilot" }),
+      });
+      res.json(await r.json());
+    } else if (action === "poll") {
+      if (!device_code) return res.status(400).json({ error: "device_code fehlt" });
+      const r = await fetch("https://github.com/login/oauth/access_token", {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({
+          client_id: COPILOT_CLIENT_ID,
+          device_code,
+          grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+        }),
+      });
+      res.json(await r.json());
+    } else {
+      res.status(400).json({ error: "Unbekannte action" });
+    }
+  } catch (err) {
+    console.error("Copilot OAuth Error:", err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 
