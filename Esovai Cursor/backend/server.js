@@ -142,6 +142,59 @@ app.get("/health", (_req, res) =>
   res.json({ status: "ok" }) // kein provider/model nach außen
 );
 
+// ── GitHub OAuth — VOR Auth-Guard (kein Bearer-Token von GitHub) ──
+app.get("/auth/github", (req, res) => {
+  if (!GH_CLIENT_ID) return res.status(503).json({ error: "GitHub OAuth nicht konfiguriert" });
+  const redirect_uri = `${process.env.FRONTEND_ORIGIN}/auth/github/callback`;
+  res.redirect(
+    `https://github.com/login/oauth/authorize?client_id=${GH_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirect_uri)}&scope=user:email`
+  );
+});
+
+app.get("/auth/github/callback", async (req, res) => {
+  const { code } = req.query;
+  if (!code) return res.redirect(`${process.env.FRONTEND_ORIGIN}/?auth_error=missing_code`);
+  try {
+    const tokenRes = await fetch("https://github.com/login/oauth/access_token", {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ client_id: GH_CLIENT_ID, client_secret: GH_CLIENT_SECRET, code }),
+    });
+    const { access_token, error } = await tokenRes.json();
+    if (!access_token || error) return res.redirect(`${process.env.FRONTEND_ORIGIN}/?auth_error=${error || "no_token"}`);
+
+    const userRes = await fetch("https://api.github.com/user", {
+      headers: { Authorization: `token ${access_token}`, "User-Agent": "kimi-app" },
+    });
+    const ghUser = await userRes.json();
+    if (!db) return res.redirect(`${process.env.FRONTEND_ORIGIN}/?auth_error=db_unavailable`);
+
+    const userId = `gh_${ghUser.id}`;
+    db.prepare(`
+      INSERT INTO users (id, github_id, username, avatar_url, email)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(github_id) DO UPDATE SET username=excluded.username, avatar_url=excluded.avatar_url, email=excluded.email
+    `).run(userId, String(ghUser.id), ghUser.login, ghUser.avatar_url || "", ghUser.email || "");
+
+    const user = db.prepare("SELECT * FROM users WHERE id = ?").get(userId);
+    const token = signToken(user);
+    res.redirect(`${process.env.FRONTEND_ORIGIN}/?auth_token=${token}`);
+  } catch (e) {
+    console.error("GitHub OAuth error:", e.message);
+    res.redirect(`${process.env.FRONTEND_ORIGIN}/?auth_error=server_error`);
+  }
+});
+
+app.get("/auth/me", (req, res) => {
+  if (!JWT_SECRET || !db) return res.status(503).json({ error: "Auth nicht konfiguriert" });
+  const token = req.headers["x-user-token"];
+  const payload = token ? verifyToken(token) : null;
+  if (!payload) return res.status(401).json({ error: "Unauthorized" });
+  const user = db.prepare("SELECT id, username, avatar_url FROM users WHERE id = ?").get(payload.sub);
+  if (!user) return res.status(404).json({ error: "User nicht gefunden" });
+  res.json(user);
+});
+
 // Auth Guard — timing-safe Vergleich (verhindert Timing-Angriffe)
 function timingSafeCompare(a, b) {
   const bufA = Buffer.from(a);
@@ -299,58 +352,6 @@ app.post("/api/copilot-auth", async (req, res) => {
   }
 });
 
-// ── GitHub OAuth ──────────────────────────────────────────
-app.get("/auth/github", (req, res) => {
-  if (!GH_CLIENT_ID) return res.status(503).json({ error: "GitHub OAuth nicht konfiguriert" });
-  const redirect_uri = `${process.env.FRONTEND_ORIGIN}/auth/github/callback`;
-  res.redirect(
-    `https://github.com/login/oauth/authorize?client_id=${GH_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirect_uri)}&scope=user:email`
-  );
-});
-
-app.get("/auth/github/callback", async (req, res) => {
-  const { code } = req.query;
-  if (!code) return res.redirect(`${process.env.FRONTEND_ORIGIN}/?auth_error=missing_code`);
-  try {
-    const tokenRes = await fetch("https://github.com/login/oauth/access_token", {
-      method: "POST",
-      headers: { Accept: "application/json", "Content-Type": "application/json" },
-      body: JSON.stringify({ client_id: GH_CLIENT_ID, client_secret: GH_CLIENT_SECRET, code }),
-    });
-    const { access_token, error } = await tokenRes.json();
-    if (!access_token || error) return res.redirect(`${process.env.FRONTEND_ORIGIN}/?auth_error=${error || "no_token"}`);
-
-    const userRes = await fetch("https://api.github.com/user", {
-      headers: { Authorization: `token ${access_token}`, "User-Agent": "kimi-app" },
-    });
-    const ghUser = await userRes.json();
-    if (!db) return res.redirect(`${process.env.FRONTEND_ORIGIN}/?auth_error=db_unavailable`);
-
-    const userId = `gh_${ghUser.id}`;
-    db.prepare(`
-      INSERT INTO users (id, github_id, username, avatar_url, email)
-      VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(github_id) DO UPDATE SET username=excluded.username, avatar_url=excluded.avatar_url, email=excluded.email
-    `).run(userId, String(ghUser.id), ghUser.login, ghUser.avatar_url || "", ghUser.email || "");
-
-    const user = db.prepare("SELECT * FROM users WHERE id = ?").get(userId);
-    const token = signToken(user);
-    res.redirect(`${process.env.FRONTEND_ORIGIN}/?auth_token=${token}`);
-  } catch (e) {
-    console.error("GitHub OAuth error:", e.message);
-    res.redirect(`${process.env.FRONTEND_ORIGIN}/?auth_error=server_error`);
-  }
-});
-
-app.get("/auth/me", (req, res) => {
-  if (!JWT_SECRET || !db) return res.status(503).json({ error: "Auth nicht konfiguriert" });
-  const token = req.headers["x-user-token"];
-  const payload = token ? verifyToken(token) : null;
-  if (!payload) return res.status(401).json({ error: "Unauthorized" });
-  const user = db.prepare("SELECT id, username, avatar_url FROM users WHERE id = ?").get(payload.sub);
-  if (!user) return res.status(404).json({ error: "User nicht gefunden" });
-  res.json(user);
-});
 
 // ── Chat Persistence ──────────────────────────────────────
 app.get("/api/chats", (req, res) => {
