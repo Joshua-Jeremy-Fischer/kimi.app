@@ -161,18 +161,13 @@ app.use((req, res, next) => {
   next();
 });
 
-// Rate Limit
-function safeKeyGenerator(req) {
-  const ip = req.ip || req.socket.remoteAddress || "unknown";
-  return ip.startsWith("::ffff:") ? ip.substring(7) : ip; // IPv4-mapped IPv6 → reine IPv4
-}
-
+// Rate Limit — kein eigener keyGenerator: Default in express-rate-limit ≥8 ist IPv6-/::ffff:-sicher
+// (manueller req.ip-Key löst ERR_ERL_KEY_GEN_IPV6 aus)
 app.use("/api/chat", rateLimit({
   windowMs: 60_000,
   max: 10,
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: safeKeyGenerator,
 }));
 
 // Providers-Endpoint — zeigt verfügbare Provider (ohne API-Keys)
@@ -239,7 +234,7 @@ app.post("/api/chat", async (req, res) => {
 });
 
 // ── Flashcards Endpoint ───────────────────────────────────
-app.use("/api/flashcards", rateLimit({ windowMs: 60_000, max: 10, standardHeaders: true, legacyHeaders: false, keyGenerator: safeKeyGenerator }));
+app.use("/api/flashcards", rateLimit({ windowMs: 60_000, max: 10, standardHeaders: true, legacyHeaders: false }));
 
 app.post("/api/flashcards", async (req, res) => {
   const { text } = req.body;
