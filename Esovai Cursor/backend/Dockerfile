@@ -8,13 +8,13 @@ COPY package*.json ./
 # npm ci bevorzugt (benötigt package-lock.json); fallback: npm install --omit=dev
 RUN if [ -f package-lock.json ]; then npm ci --omit=dev; else npm install --omit=dev; fi
 
-COPY server.js ./
+COPY server.js auth.js ./
 
-# FIM-Hashes beim Build generieren (nur server.js)
+# FIM-Hashes beim Build generieren (server.js + auth.js)
 RUN node -e "
 const crypto = require('crypto');
 const fs = require('fs');
-const files = ['server.js'];
+const files = ['server.js', 'auth.js'];
 const hashes = {};
 for (const f of files) {
   hashes[f] = crypto.createHash('sha256').update(fs.readFileSync(f)).digest('hex');

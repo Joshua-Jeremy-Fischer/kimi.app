@@ -76,6 +76,17 @@ if (DEFAULT_PROVIDER === "github-copilot" && !process.env.GITHUB_CLIENT_ID) {
   console.warn("WARN: DEFAULT_PROVIDER=github-copilot aber GITHUB_CLIENT_ID fehlt — /auth/github wird nicht funktionieren.");
 }
 
+if (process.env.GITHUB_CLIENT_ID) {
+  if (!process.env.GITHUB_CLIENT_SECRET) {
+    console.error('FATAL: GITHUB_CLIENT_ID gesetzt aber GITHUB_CLIENT_SECRET fehlt — GitHub OAuth unvollständig.');
+    process.exit(1);
+  }
+  if (!process.env.ENCRYPTION_KEY || process.env.ENCRYPTION_KEY.length !== 64) {
+    console.error('FATAL: GITHUB_CLIENT_ID gesetzt aber ENCRYPTION_KEY fehlt/ungültig (muss 64 Hex-Zeichen sein) — GitHub OAuth unvollständig.');
+    process.exit(1);
+  }
+}
+
 // ── FIM-Check ──────────────────────────────────────────────
 const HASHES_FILE = path.join(__dirname, ".fim_hashes.json");
 
@@ -141,7 +152,7 @@ function timingSafeCompare(a, b) {
   const bufA = Buffer.from(a);
   const bufB = Buffer.from(b);
   if (bufA.length !== bufB.length) {
-    crypto.timingSafeEqual(bufA, bufA);
+    crypto.timingSafeEqual(bufA, Buffer.alloc(bufA.length));
     return false;
   }
   return crypto.timingSafeEqual(bufA, bufB);

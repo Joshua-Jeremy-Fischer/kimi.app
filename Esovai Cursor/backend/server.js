@@ -7,6 +7,7 @@ import crypto from "crypto";
 import fs from "fs";
 import { fileURLToPath } from "url";
 import path from "path";
+import { createAuthRouter } from "./auth.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -39,6 +40,17 @@ const DEFAULT_PROVIDER = process.env.DEFAULT_PROVIDER || "ollama";
 
 // ── Startup Env-Check ─────────────────────────────────────
 const REQUIRED_ENV = ["ALLOWED_TOKEN", "FRONTEND_ORIGIN"];
+
+if (process.env.GITHUB_CLIENT_ID) {
+  if (!process.env.GITHUB_CLIENT_SECRET) {
+    console.error('FATAL: GITHUB_CLIENT_ID gesetzt aber GITHUB_CLIENT_SECRET fehlt — GitHub OAuth unvollständig.');
+    process.exit(1);
+  }
+  if (!process.env.ENCRYPTION_KEY || process.env.ENCRYPTION_KEY.length !== 64) {
+    console.error('FATAL: GITHUB_CLIENT_ID gesetzt aber ENCRYPTION_KEY fehlt/ungültig (muss 64 Hex-Zeichen sein) — GitHub OAuth unvollständig.');
+    process.exit(1);
+  }
+}
 
 for (const key of REQUIRED_ENV) {
   if (!process.env[key]) {
@@ -93,12 +105,15 @@ app.get("/health", (_req, res) =>
   res.json({ status: "ok" }) // kein provider/model nach außen
 );
 
+// Auth routes — VOR ALLOWED_TOKEN Guard (GitHub OAuth callback kommt ohne Bearer)
+app.use("/auth", createAuthRouter());
+
 // Auth Guard — timing-safe Vergleich (verhindert Timing-Angriffe)
 function timingSafeCompare(a, b) {
   const bufA = Buffer.from(a);
   const bufB = Buffer.from(b);
   if (bufA.length !== bufB.length) {
-    crypto.timingSafeEqual(bufA, bufA); // gleiche Zeit, false zurück
+    crypto.timingSafeEqual(bufA, Buffer.alloc(bufA.length)); // gleiche Zeit, false zurück
     return false;
   }
   return crypto.timingSafeEqual(bufA, bufB);
@@ -184,7 +199,7 @@ app.post("/api/chat", async (req, res) => {
     });
   } catch (err) {
     console.error(`LLM Error [${providerName}/${model}]:`, err.message);
-    res.status(500).json({ error: err.message || "Interner Fehler" });
+    res.status(500).json({ error: "Interner Fehler" });
   }
 });
 

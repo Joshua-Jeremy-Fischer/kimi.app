@@ -100,7 +100,6 @@ export function createAuthRouter() {
       if (process.env.ENCRYPTION_KEY?.length === 64) {
         tokenStore.githubToken = encrypt(tokenData.access_token);
       } else {
-        // Ohne Encryption Key: Token nicht speichern (warnen)
         console.warn("WARN: ENCRYPTION_KEY fehlt — GitHub Token wird nicht gespeichert");
         return res.status(503).json({ error: "ENCRYPTION_KEY nicht konfiguriert" });
       }
