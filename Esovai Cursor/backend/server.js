@@ -9,6 +9,8 @@ import { fileURLToPath } from "url";
 import path from "path";
 import Database from "better-sqlite3";
 import jwt from "jsonwebtoken";
+import { createAgentRouter } from "./agent.js";
+import { createAuthRouter } from "./auth.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -195,6 +197,9 @@ app.get("/auth/me", (req, res) => {
   res.json(user);
 });
 
+// ── Provider Auth routes (Copilot, etc.) — VOR Auth-Guard ────
+app.use("/auth", createAuthRouter());
+
 // Auth Guard — timing-safe Vergleich (verhindert Timing-Angriffe)
 function timingSafeCompare(a, b) {
   const bufA = Buffer.from(a);
@@ -222,6 +227,9 @@ app.use("/api/chat", rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 }));
+
+// Agent Endpoint (Shell / Web / File / Git — Permissions via toggles)
+app.use("/api/agent", createAgentRouter());
 
 // Providers-Endpoint — zeigt verfügbare Provider (ohne API-Keys)
 app.get("/api/providers", (_req, res) => {
