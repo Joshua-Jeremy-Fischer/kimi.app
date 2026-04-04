@@ -31,6 +31,71 @@ function makeLLMClient(overrideModel) {
   return { client: new OpenAI({ apiKey, baseURL }), model: overrideModel || model };
 }
 
+// ── Web Search (Tavily → Serper → Brave → DuckDuckGo) ─────
+async function webSearch(query) {
+  // 1. Tavily
+  if (process.env.TAVILY_API_KEY) {
+    try {
+      const r = await fetch("https://api.tavily.com/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ api_key: process.env.TAVILY_API_KEY, query, max_results: 5 }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      const d = await r.json();
+      if (d.results?.length) {
+        return { source: "tavily", results: d.results.map(x => ({ title: x.title, url: x.url, snippet: x.content?.slice(0, 500) })) };
+      }
+    } catch {}
+  }
+
+  // 2. Serper (Google)
+  if (process.env.SERPER_API_KEY) {
+    try {
+      const r = await fetch("https://google.serper.dev/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-API-KEY": process.env.SERPER_API_KEY },
+        body: JSON.stringify({ q: query, num: 5 }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      const d = await r.json();
+      if (d.organic?.length) {
+        return { source: "serper", results: d.organic.map(x => ({ title: x.title, url: x.link, snippet: x.snippet })) };
+      }
+    } catch {}
+  }
+
+  // 3. Brave
+  if (process.env.BRAVE_API_KEY) {
+    try {
+      const r = await fetch(`https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=5`, {
+        headers: { "Accept": "application/json", "X-Subscription-Token": process.env.BRAVE_API_KEY },
+        signal: AbortSignal.timeout(10_000),
+      });
+      const d = await r.json();
+      if (d.web?.results?.length) {
+        return { source: "brave", results: d.web.results.map(x => ({ title: x.title, url: x.url, snippet: x.description })) };
+      }
+    } catch {}
+  }
+
+  // 4. DuckDuckGo (kein Key nötig)
+  try {
+    const r = await fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`, {
+      signal: AbortSignal.timeout(10_000),
+    });
+    const d = await r.json();
+    const results = [];
+    if (d.AbstractText) results.push({ title: d.Heading, url: d.AbstractURL, snippet: d.AbstractText });
+    for (const t of (d.RelatedTopics || []).slice(0, 4)) {
+      if (t.FirstURL) results.push({ title: t.Text?.slice(0, 80), url: t.FirstURL, snippet: t.Text?.slice(0, 300) });
+    }
+    if (results.length) return { source: "duckduckgo", results };
+  } catch {}
+
+  return { error: "Alle Suchanbieter fehlgeschlagen" };
+}
+
 // ── Tool definitions ───────────────────────────────────────
 const TOOLS = {
   shell: [{
@@ -45,18 +110,32 @@ const TOOLS = {
       },
     },
   }],
-  web: [{
-    type: "function",
-    function: {
-      name: "web_fetch",
-      description: "Fetch the content of a URL.",
-      parameters: {
-        type: "object",
-        properties: { url: { type: "string", description: "URL to fetch" } },
-        required: ["url"],
+  web: [
+    {
+      type: "function",
+      function: {
+        name: "web_search",
+        description: "Search the web for current information. Uses Tavily, Serper, Brave, or DuckDuckGo automatically.",
+        parameters: {
+          type: "object",
+          properties: { query: { type: "string", description: "Search query" } },
+          required: ["query"],
+        },
       },
     },
-  }],
+    {
+      type: "function",
+      function: {
+        name: "web_fetch",
+        description: "Fetch the full content of a specific URL.",
+        parameters: {
+          type: "object",
+          properties: { url: { type: "string", description: "URL to fetch" } },
+          required: ["url"],
+        },
+      },
+    },
+  ],
   fileSystem: [
     {
       type: "function",
@@ -123,6 +202,10 @@ async function executeTool(name, args) {
           maxBuffer: 2 * 1024 * 1024,
         });
         return { stdout: stdout.slice(0, 8000), stderr: stderr.slice(0, 2000) };
+      }
+      case "web_search": {
+        if (!perms.web) return { error: "Web permission not granted" };
+        return await webSearch(args.query ?? "");
       }
       case "web_fetch": {
         if (!perms.web) return { error: "Web permission not granted" };
