@@ -3,7 +3,7 @@ import path from "path";
 
 const RESULTS_FILE = "/data/jobs.json";
 const COUNTER_FILE = "/data/search-counter.json";
-const INTERVAL_MS = 60 * 60 * 1000; // 1 Stunde
+const INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 Stunden
 
 // Rotation: 1×Tavily, 1×Serper, 1×Brave, 7×DDG pro 10 Suchen → je ~864/Monat
 const PROVIDER_ROTATION = [
