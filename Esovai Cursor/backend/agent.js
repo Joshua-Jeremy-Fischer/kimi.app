@@ -3,6 +3,7 @@ import { exec } from "child_process";
 import { promisify } from "util";
 import fs from "fs/promises";
 import OpenAI from "openai";
+import { startJobCrawler, crawlJobs, getJobResults } from "./job-crawler.js";
 
 const execAsync = promisify(exec);
 
@@ -292,6 +293,15 @@ export function createAgentRouter() {
     res.json({ active: preferredSearchProvider });
   });
 
+  // GET /api/agent/jobs — Letzte Job-Crawler Ergebnisse
+  router.get("/jobs", (_req, res) => res.json(getJobResults()));
+
+  // POST /api/agent/jobs/run — Sofort-Durchlauf triggern
+  router.post("/jobs/run", (_req, res) => {
+    crawlJobs(webSearch, makeLLMClient);
+    res.json({ ok: true, message: "Job-Crawler gestartet" });
+  });
+
   // GET /api/agent/permissions
   router.get("/permissions", (_req, res) => res.json(perms));
 
@@ -371,6 +381,9 @@ export function createAgentRouter() {
       return res.status(500).json({ error: err.message });
     }
   });
+
+  // Job-Crawler starten
+  startJobCrawler(webSearch, makeLLMClient);
 
   return router;
 }
