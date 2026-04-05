@@ -3,7 +3,7 @@ const fs = require("fs");
 const path = require("path");
 
 const dir = path.join(__dirname, "..");
-const files = ["server.js", "agent.js"];
+const files = ["server.js", "agent.js", "auth.js"];
 const hashes = {};
 for (const f of files) {
   const full = path.join(dir, f);

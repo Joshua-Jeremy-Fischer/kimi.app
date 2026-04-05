@@ -11,6 +11,7 @@ import Database from "better-sqlite3";
 import jwt from "jsonwebtoken";
 import { createAgentRouter } from "./agent.js";
 import { createAuthRouter } from "./auth.js";
+import { loadSubscriptions, addSubscription, sendPush, startCheckin } from "./push.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -406,6 +407,28 @@ app.post("/api/chats/sync", (req, res) => {
   }
 });
 
-app.listen(process.env.PORT || 3010, () =>
-  console.log(`✓ Backend | Default-Provider: ${DEFAULT_PROVIDER} | Model: ${PROVIDER_REGISTRY[DEFAULT_PROVIDER].getModel()}`)
-);
+// ── Push Routes ───────────────────────────────────────────
+app.post("/api/push/subscribe", (req, res) => {
+  const sub = req.body;
+  if (!sub?.endpoint) return res.status(400).json({ error: "Ungültige Subscription" });
+  addSubscription(sub);
+  res.json({ ok: true });
+});
+
+app.get("/api/push/vapid-public-key", (_req, res) => {
+  res.json({ key: process.env.VAPID_PUBLIC_KEY || "" });
+});
+
+app.post("/api/push/checkin-response", (req, res) => {
+  // Stille Ablehnung vom Service Worker
+  console.log("[CHECKIN] Abgelehnt via Notification-Button");
+  res.json({ ok: true });
+});
+
+app.listen(process.env.PORT || 3010, async () => {
+  await loadSubscriptions();
+  if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
+    startCheckin();
+  }
+  console.log(`✓ Backend | Default-Provider: ${DEFAULT_PROVIDER} | Model: ${PROVIDER_REGISTRY[DEFAULT_PROVIDER].getModel()}`);
+});
