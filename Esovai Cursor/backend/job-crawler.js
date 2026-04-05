@@ -2,7 +2,35 @@ import fs from "fs/promises";
 import path from "path";
 
 const RESULTS_FILE = "/data/jobs.json";
+const COUNTER_FILE = "/data/search-counter.json";
 const INTERVAL_MS = 60 * 60 * 1000; // 1 Stunde
+
+// Rotation: 1×Tavily, 1×Serper, 1×Brave, 7×DDG pro 10 Suchen → je ~864/Monat
+const PROVIDER_ROTATION = [
+  "tavily", "serper", "brave",
+  "duckduckgo", "duckduckgo", "duckduckgo",
+  "duckduckgo", "duckduckgo", "duckduckgo", "duckduckgo"
+];
+
+let searchCounter = 0;
+
+async function loadCounter() {
+  try {
+    const raw = await fs.readFile(COUNTER_FILE, "utf8");
+    searchCounter = JSON.parse(raw).count || 0;
+  } catch { searchCounter = 0; }
+}
+
+async function saveCounter() {
+  try { await fs.writeFile(COUNTER_FILE, JSON.stringify({ count: searchCounter }), "utf8"); } catch {}
+}
+
+function nextProvider() {
+  const provider = PROVIDER_ROTATION[searchCounter % PROVIDER_ROTATION.length];
+  searchCounter++;
+  saveCounter();
+  return provider;
+}
 
 const PROFILES = [
   {
@@ -100,12 +128,13 @@ async function saveResults() {
 }
 
 async function runSearch(profile, webSearch, makeLLMClient) {
-  console.log(`[JOB-CRAWLER] Starte Suche: ${profile.label}`);
+  const provider = nextProvider();
+  console.log(`[JOB-CRAWLER] Starte Suche: ${profile.label} via ${provider}`);
   const allSnippets = [];
 
   for (const query of profile.queries) {
     try {
-      const result = await webSearch(query);
+      const result = await webSearch(query, provider);
       if (result.results?.length) {
         for (const r of result.results) {
           allSnippets.push(`Titel: ${r.title}\nURL: ${r.url}\nBeschreibung: ${r.snippet || ""}`);
@@ -171,6 +200,7 @@ export async function crawlJobs(webSearch, makeLLMClient) {
 
 export async function startJobCrawler(webSearch, makeLLMClient) {
   await loadPersistedResults();
+  await loadCounter();
   console.log("[JOB-CRAWLER] Gestartet — läuft stündlich.");
 
   // Sofort einmal laufen lassen
