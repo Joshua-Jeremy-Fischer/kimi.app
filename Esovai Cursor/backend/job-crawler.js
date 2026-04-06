@@ -1,5 +1,8 @@
 import fs from "fs/promises";
 import path from "path";
+import { chromium } from "playwright-core";
+
+const CHROMIUM_PATH = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || "/usr/bin/chromium-browser";
 
 const RESULTS_FILE = "/data/jobs.json";
 const COUNTER_FILE = "/data/search-counter.json";
@@ -106,6 +109,7 @@ const PROFILES = [
   {
     id: "it-security",
     label: "IT Security",
+    browserKeywords: "Junior IT Security Analyst SOC",
     queries: [
       `site:stepstone.de/stellenangebote Junior SOC Analyst München Remote ${AFTER_DATE}`,
       `site:stellenanzeigen.de/job Junior IT Security Analyst Remote Deutschland ${AFTER_DATE}`,
@@ -117,6 +121,7 @@ const PROFILES = [
   {
     id: "kaufmaennisch",
     label: "Kaufmännisch",
+    browserKeywords: "Sachbearbeiter Innendienst Kaufmännisch",
     queries: [
       `site:stepstone.de/stellenangebote Sachbearbeiter Innendienst München Erding ${AFTER_DATE}`,
       `site:stellenanzeigen.de/job Kaufmännischer Mitarbeiter Innendienst Mühldorf Rosenheim ${AFTER_DATE}`,
@@ -128,6 +133,7 @@ const PROFILES = [
   {
     id: "it-support-remote",
     label: "IT Support Remote",
+    browserKeywords: "Junior IT Support Helpdesk Service Desk",
     queries: [
       `site:stepstone.de/stellenangebote Junior IT Support Helpdesk Remote Deutschland ${AFTER_DATE}`,
       `site:stellenanzeigen.de/job Junior IT Support Service Desk Remote Homeoffice ${AFTER_DATE}`,
@@ -301,23 +307,101 @@ async function fetchJobDetail(url, fallbackTitle) {
   return null;
 }
 
+// ── Headless Browser: direkt auf Stepstone suchen ────────────────────────────
+async function browserSearchStepstone(keywords, opts = {}) {
+  let browser;
+  try {
+    browser = await chromium.launch({
+      executablePath: CHROMIUM_PATH,
+      headless: true,
+      args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-setuid-sandbox", "--disable-gpu"],
+    });
+    const ctx = await browser.newContext({
+      locale: "de-DE",
+      userAgent: USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)],
+    });
+    const page = await ctx.newPage();
+
+    // Remote ODER München-Region
+    const slug = encodeURIComponent(keywords.replace(/\s+/g, "-").toLowerCase());
+    const url = opts.remote
+      ? `https://www.stepstone.de/stellenangebote/${slug}.html?homeoffice=2&sort=2`
+      : `https://www.stepstone.de/stellenangebote/${slug}/in-münchen.html?sort=2&radius=50`;
+
+    console.log(`[BROWSER] Stepstone → ${url}`);
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+    await page.waitForSelector('[data-at="job-item"]', { timeout: 8_000 }).catch(() => {});
+
+    const jobs = await page.$$eval('[data-at="job-item"]', (cards) =>
+      cards.slice(0, 15).map(card => {
+        const titleEl = card.querySelector('[data-at="job-item-title"]');
+        const link = card.querySelector('a[href*="stellenangebote"]');
+        return {
+          title: titleEl?.innerText?.trim() || "",
+          company: card.querySelector('[data-at="job-item-company-name"]')?.innerText?.trim() || "",
+          location: card.querySelector('[data-at="job-item-location"]')?.innerText?.trim() || "",
+          url: link?.href || "",
+          snippet: card.querySelector('[data-at="job-item-company-name"]')?.innerText?.trim() || "",
+        };
+      })
+    );
+
+    const valid = jobs.filter(j => j.title && j.url.includes("stepstone.de"));
+    console.log(`[BROWSER] Stepstone: ${valid.length} Jobs gefunden (${opts.remote ? "remote" : "münchen"})`);
+    return valid;
+  } catch (e) {
+    console.warn(`[BROWSER] Stepstone Fehler: ${e.message}`);
+    return [];
+  } finally {
+    await browser?.close();
+  }
+}
+
+// Bündelt alle Browser-Suchen für ein Profil
+async function browserSearchAll(profile) {
+  const keywords = profile.browserKeywords || profile.label;
+  const [local, remote] = await Promise.all([
+    browserSearchStepstone(keywords, { remote: false }),
+    browserSearchStepstone(keywords, { remote: true }),
+  ]);
+  return [...local, ...remote];
+}
+
 async function runSearch(profile, webSearch, makeLLMClient) {
   const provider = nextProvider();
-  console.log(`[JOB-CRAWLER] Starte Suche: ${profile.label} via ${provider}`);
-  const allRaw = []; // raw result objects {title, url, snippet}
+  console.log(`[JOB-CRAWLER] Starte Suche: ${profile.label} via ${provider} + Browser`);
+  const allRaw = [];
 
-  for (const query of profile.queries) {
-    try {
-      const result = await webSearch(query, provider);
-      if (result.results?.length) {
-        for (const r of result.results) {
-          // Deduplizieren nach URL
-          if (!allRaw.find(x => x.url === r.url)) allRaw.push(r);
+  // SearXNG + Browser parallel starten
+  const [, browserResults] = await Promise.all([
+    // SearXNG-Queries
+    (async () => {
+      for (const query of profile.queries) {
+        try {
+          const result = await webSearch(query, provider);
+          if (result.results?.length) {
+            for (const r of result.results) {
+              if (!allRaw.find(x => x.url === r.url)) allRaw.push(r);
+            }
+          }
+        } catch (e) {
+          console.error(`[JOB-CRAWLER] Suche fehlgeschlagen (${query}):`, e.message);
         }
       }
-    } catch (e) {
-      console.error(`[JOB-CRAWLER] Suche fehlgeschlagen (${query}):`, e.message);
-    }
+    })(),
+    // Headless Browser direkt auf Stepstone
+    browserSearchAll(profile).catch(e => {
+      console.warn(`[BROWSER] Fehler: ${e.message}`);
+      return [];
+    }),
+  ]);
+
+  // Browser-Ergebnisse dedupliziert hinzufügen
+  for (const r of browserResults) {
+    if (r.url && !allRaw.find(x => x.url === r.url)) allRaw.push(r);
+  }
+  console.log(`[JOB-CRAWLER] ${profile.label}: ${allRaw.length} gesamt (SearXNG + Browser)`);
+
   }
 
   if (allRaw.length === 0) {

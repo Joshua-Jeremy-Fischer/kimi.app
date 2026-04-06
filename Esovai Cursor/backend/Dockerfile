@@ -1,6 +1,13 @@
 FROM node:20-alpine
 
-RUN apk add --no-cache python3 make g++
+# Build-Tools + Chromium für Playwright (headless Browser-Suche)
+RUN apk add --no-cache \
+    python3 make g++ \
+    chromium nss freetype harfbuzz ca-certificates ttf-freefont udev
+
+# Playwright soll NICHT seinen eigenen Browser runterladen — wir nutzen System-Chromium
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium-browser
 
 WORKDIR /app
 
