@@ -196,6 +196,20 @@ export async function crawlJobs(webSearch, makeLLMClient) {
   jobStore.running = false;
   await saveResults();
   console.log(`[JOB-CRAWLER] Durchlauf abgeschlossen: ${jobStore.lastRun}`);
+
+  // Zusammenfassung in Agent-Inbox schreiben
+  try {
+    const { addInboxMessage } = await import("./agent.js");
+    const summaries = Object.values(jobStore.profiles)
+      .filter(p => p.content)
+      .map(p => `**${p.name}**\n${p.content.slice(0, 400)}`)
+      .join("\n\n---\n\n");
+    if (summaries) {
+      await addInboxMessage("assistant", `🔍 **Job-Crawler Ergebnisse** (${new Date().toLocaleString("de-DE")})\n\n${summaries}`);
+    }
+  } catch (e) {
+    console.warn("[JOB-CRAWLER] Inbox-Write fehlgeschlagen:", e.message);
+  }
 }
 
 export async function startJobCrawler(webSearch, makeLLMClient) {

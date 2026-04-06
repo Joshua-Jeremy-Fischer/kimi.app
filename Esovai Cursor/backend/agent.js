@@ -7,6 +7,23 @@ import { startJobCrawler, crawlJobs, getJobResults } from "./job-crawler.js";
 
 const execAsync = promisify(exec);
 
+// ── Agent Inbox ────────────────────────────────────────────
+const INBOX_FILE = "/data/agent-inbox.json";
+
+async function readInbox() {
+  try { return JSON.parse(await fs.readFile(INBOX_FILE, "utf8")); } catch { return []; }
+}
+
+async function writeInbox(messages) {
+  await fs.writeFile(INBOX_FILE, JSON.stringify(messages.slice(-200)));
+}
+
+export async function addInboxMessage(role, content) {
+  const messages = await readInbox();
+  messages.push({ id: Date.now() + Math.random(), role, content, timestamp: Date.now() });
+  await writeInbox(messages);
+}
+
 // ── Permissions (persistent in /data/permissions.json) ────
 const PERMS_FILE = "/data/permissions.json";
 const perms = { shell: false, web: false, fileSystem: false, git: false };
@@ -441,6 +458,36 @@ export function createAgentRouter() {
       console.error("[AGENT]", err.message);
       return res.status(500).json({ error: err.message });
     }
+  });
+
+  // GET /api/agent/inbox
+  router.get("/inbox", async (_req, res) => {
+    res.json({ messages: await readInbox() });
+  });
+
+  // POST /api/agent/inbox — User schreibt, Agent antwortet
+  router.post("/inbox", async (req, res) => {
+    const { content } = req.body;
+    if (!content?.trim()) return res.status(400).json({ error: "content fehlt" });
+
+    await addInboxMessage("user", content.trim());
+
+    // Agent antwortet
+    try {
+      const { client, model } = makeLLMClient();
+      const history = await readInbox();
+      const msgs = [
+        { role: "system", content: "Du bist ESO Bot, ein persönlicher KI-Assistent. Du schreibst proaktiv in dieser Inbox über Job-Funde, Alerts und Aufgaben. Antworte kurz und hilfreich auf Deutsch." },
+        ...history.slice(-20).map(m => ({ role: m.role === "agent" ? "assistant" : m.role, content: m.content }))
+      ];
+      const response = await client.chat.completions.create({ model, messages: msgs, max_tokens: 1000 });
+      const reply = response.choices[0].message.content;
+      await addInboxMessage("assistant", reply);
+    } catch (e) {
+      await addInboxMessage("assistant", `⚠️ Fehler: ${e.message}`);
+    }
+
+    res.json({ messages: await readInbox() });
   });
 
   // Job-Crawler starten
