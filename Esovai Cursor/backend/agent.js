@@ -67,10 +67,21 @@ async function webSearch(query, forceProvider) {
 
   async function tryBrave() {
     if (!process.env.BRAVE_API_KEY) return null;
-    const r = await fetch(`https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=5`, {
-      headers: { "Accept": "application/json", "X-Subscription-Token": process.env.BRAVE_API_KEY },
+    const url = new URL("https://api.search.brave.com/res/v1/web/search");
+    url.searchParams.set("q", query);
+    url.searchParams.set("count", "5");
+    url.searchParams.set("search_lang", "de");
+    url.searchParams.set("country", "DE");
+    const r = await fetch(url.toString(), {
+      headers: {
+        "Accept": "application/json",
+        "Accept-Encoding": "gzip",
+        "X-Subscription-Token": process.env.BRAVE_API_KEY.trim(),
+        "Cache-Control": "no-cache",
+      },
       signal: AbortSignal.timeout(10_000),
     });
+    if (!r.ok) { console.warn(`[Brave] ${r.status}:`, await r.text().catch(() => "")); return null; }
     const d = await r.json();
     if (!d.web?.results?.length) return null;
     return { source: "brave", results: d.web.results.map(x => ({ title: x.title, url: x.url, snippet: x.description })) };
@@ -315,7 +326,7 @@ export function createAgentRouter() {
 
   // POST /api/agent — wake/sleep OR run agentic task
   router.post("/", async (req, res) => {
-    const { action, messages, system, maxIterations = 8 } = req.body;
+    const { action, messages, system, maxIterations = 8, preSearch = false } = req.body;
 
     // Sleep/Wake toggle
     if (action === "wake") {
@@ -336,35 +347,42 @@ export function createAgentRouter() {
 
     const { client, model } = makeLLMClient(req.headers["x-model"] ?? req.body.model);
 
-    const tools = [
-      ...(perms.shell      ? TOOLS.shell      : []),
-      ...(perms.web        ? TOOLS.web        : []),
-      ...(perms.fileSystem ? TOOLS.fileSystem : []),
-      ...(perms.git        ? TOOLS.git        : []),
-    ];
-
-    // Build tool hint to inject into system message
-    const toolNames = [];
-    if (perms.web)        toolNames.push("web_search, web_fetch");
-    if (perms.shell)      toolNames.push("bash");
-    if (perms.fileSystem) toolNames.push("read_file, write_file, list_files");
-    if (perms.git)        toolNames.push("git_command");
-
-    const toolHint = toolNames.length > 0
-      ? `\n\nDu hast Zugriff auf folgende Tools: ${toolNames.join(", ")}. Nutze sie aktiv wenn der Nutzer aktuelle Informationen, Internetrecherche oder Systemzugriff benötigt. Ruf web_search auf für alle Fragen zu aktuellen Ereignissen, Wetter, Nachrichten oder Fakten die sich ändern können.`
-      : "";
-
-    // Inject tool hint into existing system message or prepend one
-    let baseMessages = [...messages];
-    const sysIdx = baseMessages.findIndex(m => m.role === "system");
-    if (sysIdx !== -1) {
-      baseMessages[sysIdx] = { ...baseMessages[sysIdx], content: baseMessages[sysIdx].content + toolHint };
+    // ── Pre-Search Injection ───────────────────────────────
+    // Kimi K2.5 via Ollama unterstützt Tool Calling nicht zuverlässig.
+    // Wenn preSearch=true: Backend sucht selbst und injiziert Ergebnisse als Kontext.
+    let searchResultsContext = "";
+    if (preSearch && perms.web) {
+      const lastUserMsg = [...messages].reverse().find(m => m.role === "user");
+      if (lastUserMsg) {
+        try {
+          const sr = await webSearch(String(lastUserMsg.content).slice(0, 200));
+          if (sr.results?.length) {
+            searchResultsContext = sr.results.slice(0, 5)
+              .map((r, i) => `${i + 1}. ${r.title}\n   ${r.snippet || ""}\n   ${r.url}`)
+              .join("\n");
+            console.log(`[Agent] Pre-Search via ${sr.source}: ${sr.results.length} Ergebnisse`);
+          }
+        } catch (e) {
+          console.warn("[Agent] Pre-Search Fehler:", e.message);
+        }
+      }
     }
 
-    const msgs = [
-      ...(system ? [{ role: "system", content: system + toolHint }] : sysIdx === -1 && toolHint ? [{ role: "system", content: toolHint.trim() }] : []),
-      ...(system ? messages : baseMessages),
-    ];
+    // Inject Suchergebnisse in System-Prompt
+    let baseMessages = [...messages];
+    if (searchResultsContext) {
+      const inject = `\n\n[Aktuelle Web-Suchergebnisse — nutze diese für deine Antwort]\n${searchResultsContext}\n[Ende Suchergebnisse]`;
+      const sysIdx = baseMessages.findIndex(m => m.role === "system");
+      if (sysIdx !== -1) {
+        baseMessages[sysIdx] = { ...baseMessages[sysIdx], content: baseMessages[sysIdx].content + inject };
+      } else {
+        baseMessages.unshift({ role: "system", content: inject.trim() });
+      }
+    }
+
+    const msgs = system
+      ? [{ role: "system", content: system }, ...messages]
+      : baseMessages;
 
     let iterations = 0;
     try {
@@ -372,7 +390,6 @@ export function createAgentRouter() {
         const response = await client.chat.completions.create({
           model,
           messages: msgs,
-          ...(tools.length > 0 ? { tools, tool_choice: "auto" } : {}),
           max_tokens: 4000,
         });
 
@@ -382,6 +399,15 @@ export function createAgentRouter() {
         if (choice.finish_reason !== "tool_calls" || !choice.message.tool_calls?.length) {
           return res.json({ content: choice.message.content, iterations, model });
         }
+
+        // Tool-Calls falls Modell sie doch unterstützt
+        const tools = [
+          ...(perms.shell      ? TOOLS.shell      : []),
+          ...(perms.web        ? TOOLS.web        : []),
+          ...(perms.fileSystem ? TOOLS.fileSystem : []),
+          ...(perms.git        ? TOOLS.git        : []),
+        ];
+        void tools; // nur für executeTool-Pfad relevant
 
         for (const tc of choice.message.tool_calls) {
           let args = {};
