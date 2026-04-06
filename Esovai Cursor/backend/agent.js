@@ -7,8 +7,24 @@ import { startJobCrawler, crawlJobs, getJobResults } from "./job-crawler.js";
 
 const execAsync = promisify(exec);
 
-// ── Permissions (in-memory, reset on container restart) ────
+// ── Permissions (persistent in /data/permissions.json) ────
+const PERMS_FILE = "/data/permissions.json";
 const perms = { shell: false, web: false, fileSystem: false, git: false };
+
+async function loadPerms() {
+  try {
+    const raw = await fs.readFile(PERMS_FILE, "utf8");
+    const saved = JSON.parse(raw);
+    for (const key of ["shell", "web", "fileSystem", "git"]) {
+      if (typeof saved[key] === "boolean") perms[key] = saved[key];
+    }
+    console.log("[Perms] Geladen:", JSON.stringify(perms));
+  } catch { /* Datei existiert noch nicht — defaults bleiben */ }
+}
+
+async function savePerms() {
+  try { await fs.writeFile(PERMS_FILE, JSON.stringify(perms)); } catch {}
+}
 
 // ── LLM Client (mirrors server.js provider logic) ─────────
 function makeLLMClient(overrideModel) {
@@ -317,10 +333,11 @@ export function createAgentRouter() {
   router.get("/permissions", (_req, res) => res.json(perms));
 
   // POST /api/agent/permissions
-  router.post("/permissions", (req, res) => {
+  router.post("/permissions", async (req, res) => {
     for (const key of ["shell", "web", "fileSystem", "git"]) {
       if (typeof req.body[key] === "boolean") perms[key] = req.body[key];
     }
+    await savePerms();
     res.json(perms);
   });
 
@@ -428,6 +445,9 @@ export function createAgentRouter() {
 
   // Job-Crawler starten
   startJobCrawler(webSearch, makeLLMClient);
+
+  // Permissions aus Disk laden
+  loadPerms();
 
   return router;
 }
