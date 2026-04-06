@@ -137,20 +137,23 @@ async function webSearch(query, forceProvider) {
     return { source: "brave", results: d.web.results.map(x => ({ title: x.title, url: x.url, snippet: x.description })) };
   }
 
-  async function tryDuckDuckGo() {
-    const r = await fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`, {
-      signal: AbortSignal.timeout(10_000),
-    });
+  async function trySearXNG() {
+    const url = new URL("http://kimi-searxng:8080/search");
+    url.searchParams.set("q", query);
+    url.searchParams.set("format", "json");
+    url.searchParams.set("language", "de");
+    url.searchParams.set("engines", "google,bing,duckduckgo");
+    const r = await fetch(url.toString(), { signal: AbortSignal.timeout(15_000) });
+    if (!r.ok) return null;
     const d = await r.json();
-    const results = [];
-    if (d.AbstractText) results.push({ title: d.Heading, url: d.AbstractURL, snippet: d.AbstractText });
-    for (const t of (d.RelatedTopics || []).slice(0, 4)) {
-      if (t.FirstURL) results.push({ title: t.Text?.slice(0, 80), url: t.FirstURL, snippet: t.Text?.slice(0, 300) });
-    }
-    return results.length ? { source: "duckduckgo", results } : null;
+    if (!d.results?.length) return null;
+    return {
+      source: "searxng",
+      results: d.results.slice(0, 5).map(x => ({ title: x.title, url: x.url, snippet: x.content?.slice(0, 400) })),
+    };
   }
 
-  const providers = { tavily: tryTavily, serper: trySerper, brave: tryBrave, duckduckgo: tryDuckDuckGo };
+  const providers = { tavily: tryTavily, serper: trySerper, brave: tryBrave, searxng: trySearXNG, duckduckgo: trySearXNG };
 
   // Expliziter Provider gewählt
   if (provider !== "auto" && providers[provider]) {
@@ -164,7 +167,7 @@ async function webSearch(query, forceProvider) {
   }
 
   // Auto: Fallback-Kette
-  for (const fn of [tryTavily, trySerper, tryBrave, tryDuckDuckGo]) {
+  for (const fn of [tryTavily, trySerper, tryBrave, trySearXNG]) {
     try { const r = await fn(); if (r) return r; } catch {}
   }
   return { error: "Alle Suchanbieter fehlgeschlagen" };
