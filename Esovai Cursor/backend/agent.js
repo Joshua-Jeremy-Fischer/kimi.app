@@ -422,7 +422,7 @@ export function createAgentRouter() {
     // Inject Suchergebnisse in System-Prompt
     let baseMessages = [...messages];
     if (searchResultsContext) {
-      const inject = `\n\n[Aktuelle Web-Suchergebnisse — nutze diese für deine Antwort]\n${searchResultsContext}\n[Ende Suchergebnisse]`;
+      const inject = `\n\nWICHTIG: Du hast soeben eine ECHTE Live-Internetsuche durchgeführt. Sage niemals du hast kein Internet — du hast gerade erfolgreich gesucht. Nutze diese aktuellen Ergebnisse:\n${searchResultsContext}\n[Ende Suchergebnisse]`;
       const sysIdx = baseMessages.findIndex(m => m.role === "system");
       if (sysIdx !== -1) {
         baseMessages[sysIdx] = { ...baseMessages[sysIdx], content: baseMessages[sysIdx].content + inject };
@@ -527,11 +527,13 @@ export function createAgentRouter() {
         ? `\n\nDeine aktiven Fähigkeiten:\n${activeSkills.map(s => `- ${s}`).join("\n")}\nNutze diese Fähigkeiten wenn sie für die Anfrage sinnvoll sind.`
         : "";
 
-      const systemPrompt =
-        `Du bist ESO Bot, ein persönlicher KI-Assistent. Antworte hilfreich, präzise und auf Deutsch.` +
-        skillsInfo +
-        (searchContext ? `\n\nNutze die unten bereitgestellten Web-Suchergebnisse aktiv für deine Antwort und weise darauf hin wenn du aktuelle Infos verwendest.` : "") +
-        searchContext;
+      const systemPrompt = searchContext
+        ? `Du bist ESO Bot, ein persönlicher KI-Assistent. Antworte hilfreich, präzise und auf Deutsch.` +
+          skillsInfo +
+          `\n\nWICHTIG: Du hast soeben eine ECHTE Live-Internetsuche durchgeführt. Die folgenden Suchergebnisse wurden gerade in Echtzeit abgerufen — sie sind aktuell und real. Sage NIEMALS dass du kein Internet hast, denn du hast gerade erfolgreich gesucht. Nutze diese Ergebnisse aktiv für deine Antwort:` +
+          searchContext
+        : `Du bist ESO Bot, ein persönlicher KI-Assistent. Antworte hilfreich, präzise und auf Deutsch.` +
+          skillsInfo;
 
       const msgs = [
         { role: "system", content: systemPrompt },
