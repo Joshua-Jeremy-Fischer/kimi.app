@@ -32,6 +32,37 @@ function nextProvider() {
   return provider;
 }
 
+// ── Keyword-Filter pro Profil ────────────────────────────────
+// Score: +1 pro Include-Treffer, disqualifiziert bei Exclude-Treffer
+const PROFILE_FILTERS = {
+  "it-security": {
+    include: ["security", "soc", "isms", "iam", "analyst", "cyber", "siem", "soar", "informationssicherheit", "it-sicherheit", "junior", "quereinsteiger", "remote", "homeoffice", "home office", "münchen", "erding", "dorfen"],
+    exclude: ["senior", "lead", "head of", "studium erforderlich", "hochschulabschluss zwingend", "außendienst", "fahrer", "pflicht.*studium"],
+  },
+  "kaufmaennisch": {
+    include: ["sachbearbeiter", "innendienst", "kaufmännisch", "einkauf", "vertrieb", "disponent", "erp", "warenwirtschaft", "auftragsabwicklung", "münchen", "erding", "dorfen", "mühldorf", "rosenheim", "landshut", "remote"],
+    exclude: ["senior", "außendienst >20%", "lager", "produktion", "callcenter ohne", "pflicht.*studium"],
+  },
+  "it-support-remote": {
+    include: ["it support", "helpdesk", "service desk", "onboarding", "technical support", "it consultant", "junior", "remote", "homeoffice", "home office", "deutschland"],
+    exclude: ["senior", "vor-ort zwingend", "studium erforderlich", "außendienst", "hardware reparatur"],
+  },
+};
+
+function scoreResult(result, profileId) {
+  const text = `${result.title} ${result.snippet || ""}`.toLowerCase();
+  const filter = PROFILE_FILTERS[profileId];
+  if (!filter) return 1;
+  for (const ex of filter.exclude) {
+    if (new RegExp(ex, "i").test(text)) return -1; // disqualifiziert
+  }
+  let score = 0;
+  for (const inc of filter.include) {
+    if (text.includes(inc.toLowerCase())) score++;
+  }
+  return score;
+}
+
 const PROFILES = [
   {
     id: "it-security",
@@ -42,7 +73,6 @@ const PROFILES = [
       "ISMS Koordinator Junior Stelle Deutschland Remote",
       "IAM Engineer Junior Stelle München Erding",
     ],
-    systemPrompt: `Extrahiere Jobangebote aus den Suchergebnissen. Nur Junior IT-Security Stellen (SOC, ISMS, IAM) im Raum München/Remote. Kein Pflicht-Studium. Format pro Zeile: Jobtitel | Unternehmen | Standort | Remote | URL | Datum. Wenn nichts passt: "Keine passenden Stellen gefunden."`,
   },
   {
     id: "kaufmaennisch",
@@ -53,7 +83,6 @@ const PROFILES = [
       "Disponent ERP Stelle München Großraum",
       "Sales Coordinator Junior Account Manager B2B Stelle München",
     ],
-    systemPrompt: `Extrahiere Jobangebote aus den Suchergebnissen. Nur kaufmännische Stellen (Sachbearbeiter, Innendienst, Disponent, ERP) im Raum München/Remote. Kein reiner Außendienst. Format pro Zeile: Jobtitel | Unternehmen | Standort | Remote | URL | Datum. Wenn nichts passt: "Keine passenden Stellen gefunden."`,
   },
   {
     id: "it-support-remote",
@@ -64,7 +93,6 @@ const PROFILES = [
       "SaaS Onboarding Specialist Junior Remote Deutschland",
       "Helpdesk IT Service Desk Remote Stelle Deutschland Junior",
     ],
-    systemPrompt: `Extrahiere Jobangebote aus den Suchergebnissen. Nur Remote IT-Support Stellen (Helpdesk, IT Support, SaaS Onboarding) deutschlandweit. Kein Pflicht-Studium, kein Vor-Ort-Zwang. Format pro Zeile: Jobtitel | Unternehmen | Standort | Remote | URL | Datum. Wenn nichts passt: "Keine passenden Stellen gefunden."`,
   },
 ];
 
@@ -91,14 +119,15 @@ async function saveResults() {
 async function runSearch(profile, webSearch, makeLLMClient) {
   const provider = nextProvider();
   console.log(`[JOB-CRAWLER] Starte Suche: ${profile.label} via ${provider}`);
-  const allSnippets = [];
+  const allRaw = []; // raw result objects {title, url, snippet}
 
   for (const query of profile.queries) {
     try {
       const result = await webSearch(query, provider);
       if (result.results?.length) {
         for (const r of result.results) {
-          allSnippets.push(`Titel: ${r.title}\nURL: ${r.url}\nBeschreibung: ${r.snippet || ""}`);
+          // Deduplizieren nach URL
+          if (!allRaw.find(x => x.url === r.url)) allRaw.push(r);
         }
       }
     } catch (e) {
@@ -106,13 +135,23 @@ async function runSearch(profile, webSearch, makeLLMClient) {
     }
   }
 
-  if (allSnippets.length === 0) {
+  if (allRaw.length === 0) {
     return "Keine Suchergebnisse gefunden.";
   }
 
-  // Direkt rohe Ergebnisse zurückgeben — kein LLM-Schritt (zu unzuverlässig)
-  console.log(`[JOB-CRAWLER] ${profile.label}: ${allSnippets.length} Ergebnisse gefunden`);
-  return allSnippets.slice(0, 10).join("\n---\n");
+  // Keyword-Scoring: nur Treffer die zum Profil passen
+  const scored = allRaw
+    .map(r => ({ ...r, score: scoreResult(r, profile.id) }))
+    .filter(r => r.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  console.log(`[JOB-CRAWLER] ${profile.label}: ${allRaw.length} gefunden → ${scored.length} nach Filterung`);
+
+  if (scored.length === 0) return "Keine passenden Stellen gefunden.";
+
+  return scored.slice(0, 12).map(r =>
+    `Titel: ${r.title}\nURL: ${r.url}\nBeschreibung: ${(r.snippet || "").slice(0, 200)}`
+  ).join("\n---\n");
 }
 
 export async function crawlJobs(webSearch, makeLLMClient) {
@@ -151,9 +190,9 @@ export async function crawlJobs(webSearch, makeLLMClient) {
     const { addPostfachEntry } = await import("./agent.js");
     const profiles = Object.values(jobStore.results).filter(p => p.content);
     for (const p of profiles) {
-      const lines = (p.content || "").split("\n").filter(l => l.trim() && !l.includes("Keine") );
-      const count = lines.length;
-      const title = `💼 ${p.label}: ${count > 0 ? `${count} Stelle${count !== 1 ? "n" : ""} gefunden` : "Keine Ergebnisse"}`;
+      const blocks = (p.content || "").split("---").filter(b => b.includes("Titel:"));
+      const count = blocks.length;
+      const title = `💼 ${p.label}: ${count > 0 ? `${count} passende Stelle${count !== 1 ? "n" : ""} ✓` : "Keine passenden Stellen"}`;
       await addPostfachEntry(title, p.content, "jobs");
     }
   } catch (e) {
