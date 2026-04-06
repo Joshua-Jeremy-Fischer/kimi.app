@@ -33,19 +33,31 @@ function nextProvider() {
 }
 
 // ── Keyword-Filter pro Profil ────────────────────────────────
-// Score: +1 pro Include-Treffer, disqualifiziert bei Exclude-Treffer
+// Standort-Whitelist: nur Remote ODER Großraum München
+const LOCATION_OK = ["remote", "homeoffice", "home office", "home-office", "deutschlandweit", "bundesweit",
+  "münchen", "munich", "erding", "dorfen", "mühldorf", "rosenheim", "landshut", "freising",
+  "wasserburg", "haag", "ampfing", "markt schwaben", "ebersberg", "dachau", "fürstenfeldbruck",
+  "starnberg", "wolfratshausen", "holzkirchen", "miesbach", "bad aibling", "rosenheim"];
+
+// Städte die definitiv zu weit weg sind
+const LOCATION_EXCLUDE = ["berlin", "hamburg", "frankfurt", "köln", "düsseldorf", "stuttgart",
+  "hannover", "bremen", "leipzig", "dresden", "nürnberg", "dortmund", "essen", "bochum",
+  "wuppertal", "bielefeld", "bonn", "mannheim", "karlsruhe", "freiburg", "augsburg",
+  "wien", "zürich", "schweiz", "österreich", "luxemburg"];
+
+// Score: +1 pro Include-Treffer, disqualifiziert bei Exclude-Treffer oder falschem Standort
 const PROFILE_FILTERS = {
   "it-security": {
-    include: ["security", "soc", "isms", "iam", "analyst", "cyber", "siem", "soar", "informationssicherheit", "it-sicherheit", "junior", "quereinsteiger", "remote", "homeoffice", "home office", "münchen", "erding", "dorfen"],
-    exclude: ["senior", "lead", "head of", "studium erforderlich", "hochschulabschluss zwingend", "außendienst", "fahrer", "pflicht.*studium"],
+    include: ["security", "soc", "isms", "iam", "analyst", "cyber", "siem", "soar", "informationssicherheit", "it-sicherheit", "junior", "quereinsteiger"],
+    exclude: ["senior", "lead", "head of", "studium erforderlich", "hochschulabschluss zwingend", "außendienst", "fahrer"],
   },
   "kaufmaennisch": {
-    include: ["sachbearbeiter", "innendienst", "kaufmännisch", "einkauf", "vertrieb", "disponent", "erp", "warenwirtschaft", "auftragsabwicklung", "münchen", "erding", "dorfen", "mühldorf", "rosenheim", "landshut", "remote"],
-    exclude: ["senior", "außendienst >20%", "lager", "produktion", "callcenter ohne", "pflicht.*studium"],
+    include: ["sachbearbeiter", "innendienst", "kaufmännisch", "einkauf", "vertrieb", "disponent", "erp", "warenwirtschaft", "auftragsabwicklung", "großhandel"],
+    exclude: ["senior", "lager", "produktion", "callcenter ohne sachbearbeitung", "reine.*fahrtätigkeit"],
   },
   "it-support-remote": {
-    include: ["it support", "helpdesk", "service desk", "onboarding", "technical support", "it consultant", "junior", "remote", "homeoffice", "home office", "deutschland"],
-    exclude: ["senior", "vor-ort zwingend", "studium erforderlich", "außendienst", "hardware reparatur"],
+    include: ["it support", "helpdesk", "service desk", "onboarding", "technical support", "it consultant", "junior", "quereinsteiger"],
+    exclude: ["senior", "studium erforderlich", "reine hardware", "außendienst"],
   },
 };
 
@@ -53,10 +65,20 @@ function scoreResult(result, profileId) {
   const text = `${result.title} ${result.snippet || ""}`.toLowerCase();
   const filter = PROFILE_FILTERS[profileId];
   if (!filter) return 1;
+
+  // Harte Ausschlüsse (Profil)
   for (const ex of filter.exclude) {
-    if (new RegExp(ex, "i").test(text)) return -1; // disqualifiziert
+    if (new RegExp(ex, "i").test(text)) return -1;
   }
-  let score = 0;
+
+  // Standort-Check: Remote ODER Großraum München — sonst disqualifiziert
+  const hasOkLocation = LOCATION_OK.some(loc => text.includes(loc));
+  const hasBadLocation = LOCATION_EXCLUDE.some(loc => text.includes(loc));
+
+  // Wenn explizit eine schlechte Stadt genannt wird und kein Remote → disqualifiziert
+  if (hasBadLocation && !text.includes("remote") && !text.includes("homeoffice") && !text.includes("home office")) return -1;
+
+  let score = hasOkLocation ? 2 : 0; // Standort-Bonus
   for (const inc of filter.include) {
     if (text.includes(inc.toLowerCase())) score++;
   }
