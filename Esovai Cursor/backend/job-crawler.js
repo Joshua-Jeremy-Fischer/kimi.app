@@ -307,8 +307,8 @@ async function fetchJobDetail(url, fallbackTitle) {
   return null;
 }
 
-// ── Headless Browser: direkt auf Stepstone suchen ────────────────────────────
-async function browserSearchStepstone(keywords, opts = {}) {
+// ── Hilfsfunktion: Browser starten, Seite laden, Jobs extrahieren ─────────────
+async function browserFetchJobs(url, extractFn, label) {
   let browser;
   try {
     browser = await chromium.launch({
@@ -316,55 +316,105 @@ async function browserSearchStepstone(keywords, opts = {}) {
       headless: true,
       args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-setuid-sandbox", "--disable-gpu"],
     });
-    const ctx = await browser.newContext({
-      locale: "de-DE",
-      userAgent: USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)],
-    });
-    const page = await ctx.newPage();
-
-    // Remote ODER München-Region
-    const slug = encodeURIComponent(keywords.replace(/\s+/g, "-").toLowerCase());
-    const url = opts.remote
-      ? `https://www.stepstone.de/stellenangebote/${slug}.html?homeoffice=2&sort=2`
-      : `https://www.stepstone.de/stellenangebote/${slug}/in-münchen.html?sort=2&radius=50`;
-
-    console.log(`[BROWSER] Stepstone → ${url}`);
+    const page = await browser.newPage();
+    await page.setExtraHTTPHeaders({ "Accept-Language": "de-DE,de;q=0.9" });
+    await page.setUserAgent(USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)]);
+    console.log(`[BROWSER] ${label} → ${url}`);
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
-    await page.waitForSelector('[data-at="job-item"]', { timeout: 8_000 }).catch(() => {});
-
-    const jobs = await page.$$eval('[data-at="job-item"]', (cards) =>
-      cards.slice(0, 15).map(card => {
-        const titleEl = card.querySelector('[data-at="job-item-title"]');
-        const link = card.querySelector('a[href*="stellenangebote"]');
-        return {
-          title: titleEl?.innerText?.trim() || "",
-          company: card.querySelector('[data-at="job-item-company-name"]')?.innerText?.trim() || "",
-          location: card.querySelector('[data-at="job-item-location"]')?.innerText?.trim() || "",
-          url: link?.href || "",
-          snippet: card.querySelector('[data-at="job-item-company-name"]')?.innerText?.trim() || "",
-        };
-      })
-    );
-
-    const valid = jobs.filter(j => j.title && j.url.includes("stepstone.de"));
-    console.log(`[BROWSER] Stepstone: ${valid.length} Jobs gefunden (${opts.remote ? "remote" : "münchen"})`);
+    const jobs = await extractFn(page).catch(() => []);
+    const valid = jobs.filter(j => j.title && j.url);
+    console.log(`[BROWSER] ${label}: ${valid.length} Jobs`);
     return valid;
   } catch (e) {
-    console.warn(`[BROWSER] Stepstone Fehler: ${e.message}`);
+    console.warn(`[BROWSER] ${label} Fehler: ${e.message}`);
     return [];
   } finally {
     await browser?.close();
   }
 }
 
-// Bündelt alle Browser-Suchen für ein Profil
+// ── Stepstone ─────────────────────────────────────────────────────────────────
+async function browserSearchStepstone(keywords, opts = {}) {
+  const slug = keywords.replace(/\s+/g, "-").toLowerCase();
+  const url = opts.remote
+    ? `https://www.stepstone.de/stellenangebote/${encodeURIComponent(slug)}.html?homeoffice=2&sort=2`
+    : `https://www.stepstone.de/stellenangebote/${encodeURIComponent(slug)}/in-münchen.html?sort=2&radius=50`;
+  return browserFetchJobs(url, async (page) => {
+    await page.waitForSelector('[data-at="job-item"]', { timeout: 8_000 }).catch(() => {});
+    return page.$$eval('[data-at="job-item"]', (cards) =>
+      cards.slice(0, 15).map(c => ({
+        title: c.querySelector('[data-at="job-item-title"]')?.innerText?.trim() || "",
+        company: c.querySelector('[data-at="job-item-company-name"]')?.innerText?.trim() || "",
+        location: c.querySelector('[data-at="job-item-location"]')?.innerText?.trim() || "",
+        url: c.querySelector('a[href*="stellenangebote"]')?.href || "",
+        snippet: c.querySelector('[data-at="job-item-description"]')?.innerText?.trim() || "",
+      }))
+    );
+  }, `Stepstone/${opts.remote ? "remote" : "münchen"}`);
+}
+
+// ── Indeed ────────────────────────────────────────────────────────────────────
+async function browserSearchIndeed(keywords, opts = {}) {
+  const q = encodeURIComponent(keywords);
+  const url = opts.remote
+    ? `https://de.indeed.com/jobs?q=${q}&remotejob=032b3046-06a3-4876-8dfd-474eb5e7ed11&sort=date&fromage=30`
+    : `https://de.indeed.com/jobs?q=${q}&l=M%C3%BCnchen&radius=50&sort=date&fromage=30`;
+  return browserFetchJobs(url, async (page) => {
+    await page.waitForSelector(".job_seen_beacon, [data-jk]", { timeout: 8_000 }).catch(() => {});
+    return page.$$eval(".job_seen_beacon", (cards) =>
+      cards.slice(0, 15).map(c => ({
+        title: c.querySelector(".jobTitle a span, .jobTitle span")?.innerText?.trim() || "",
+        company: c.querySelector('[data-testid="company-name"]')?.innerText?.trim() || "",
+        location: c.querySelector('[data-testid="text-location"]')?.innerText?.trim() || "",
+        url: "https://de.indeed.com" + (c.querySelector(".jobTitle a")?.getAttribute("href") || ""),
+        snippet: c.querySelector(".job-snippet")?.innerText?.trim() || "",
+      }))
+    );
+  }, `Indeed/${opts.remote ? "remote" : "münchen"}`);
+}
+
+// ── Bundesagentur für Arbeit API (kostenlos, offiziell, kein Browser nötig) ──
+async function searchBundesagentur(keywords, location = null) {
+  try {
+    const url = new URL("https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v4/jobs");
+    url.searchParams.set("was", keywords);
+    if (location) { url.searchParams.set("wo", location); url.searchParams.set("umkreis", "50"); }
+    url.searchParams.set("angebotsart", "1");
+    url.searchParams.set("page", "1");
+    url.searchParams.set("size", "25");
+    url.searchParams.set("zeitraum", "30");
+    const r = await fetch(url.toString(), {
+      headers: { "User-Agent": "Mozilla/5.0", "OAuthAccessToken": "jobboerse-jobsuche" },
+      signal: AbortSignal.timeout(12_000),
+    });
+    if (!r.ok) { console.warn(`[BA] API ${r.status}`); return []; }
+    const data = await r.json();
+    const results = (data.stellenangebote || []).map(job => ({
+      title: job.titel || "",
+      company: job.arbeitgeber || "",
+      location: job.arbeitsort?.ort || "",
+      url: `https://www.arbeitsagentur.de/jobsuche/jobdetail/${job.hashId}`,
+      snippet: `${job.beruf || ""} ${job.arbeitgeber || ""}`.trim(),
+      postedDate: job.modifikationsTimestamp
+        ? new Date(job.modifikationsTimestamp).toISOString().slice(0, 10) : "",
+    }));
+    console.log(`[BA] Bundesagentur (${location || "remote"}): ${results.length} Jobs`);
+    return results;
+  } catch (e) { console.warn(`[BA] Fehler: ${e.message}`); return []; }
+}
+
+// ── Alle Quellen für ein Profil zusammenführen ────────────────────────────────
 async function browserSearchAll(profile) {
-  const keywords = profile.browserKeywords || profile.label;
-  const [local, remote] = await Promise.all([
-    browserSearchStepstone(keywords, { remote: false }),
-    browserSearchStepstone(keywords, { remote: true }),
+  const kw = profile.browserKeywords || profile.label;
+  const [stLocal, stRemote, inLocal, inRemote, baLocal, baRemote] = await Promise.all([
+    browserSearchStepstone(kw, { remote: false }),
+    browserSearchStepstone(kw, { remote: true }),
+    browserSearchIndeed(kw, { remote: false }),
+    browserSearchIndeed(kw, { remote: true }),
+    searchBundesagentur(kw, "München"),
+    searchBundesagentur(kw + " Homeoffice Remote"),
   ]);
-  return [...local, ...remote];
+  return [...stLocal, ...stRemote, ...inLocal, ...inRemote, ...baLocal, ...baRemote];
 }
 
 async function runSearch(profile, webSearch, makeLLMClient) {
