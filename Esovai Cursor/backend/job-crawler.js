@@ -296,6 +296,23 @@ async function fetchJobDetail(url, fallbackTitle) {
       }
       if (!r.ok) return null;
       const html = await r.text();
+
+      // Stelle bereits offline/abgelaufen → überspringen
+      const expired = [
+        "diese anzeige ist nicht mehr online",
+        "stellenangebot nicht mehr verfügbar",
+        "diese stelle ist nicht mehr verfügbar",
+        "this job has expired",
+        "job is no longer available",
+        "anzeige wurde deaktiviert",
+        "es werden keine bewerbungen mehr angenommen",
+      ];
+      const htmlLower = html.slice(0, 5000).toLowerCase();
+      if (expired.some(s => htmlLower.includes(s))) {
+        console.log(`[JOB-CRAWLER] Überspringe abgelaufene Stelle: ${url}`);
+        return null;
+      }
+
       const result = extractFromHtml(html, fallbackTitle);
       console.log(`[JOB-CRAWLER] Fetch OK (${result.source}): ${result.title?.slice(0, 60)}`);
       return result;
