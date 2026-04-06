@@ -38,6 +38,7 @@ function nextProvider() {
 // Linie: Dorfen → Isen → Markt Schwaben → München Ost → München Hbf
 // Mühldorf-Linie: Mühldorf → Ampfing → Haag → Rosenheim
 const LOCATION_OK = ["remote", "homeoffice", "home office", "home-office", "deutschlandweit", "bundesweit",
+  "deutschland", "germany", "deutschlandweit", "überall",
   "münchen", "munich", "erding", "dorfen", "mühldorf", "rosenheim",
   "markt schwaben", "isen", "ebersberg", "haag", "ampfing", "wasserburg",
   "poing", "zorneding", "grafing"];
@@ -64,30 +65,30 @@ const PROFILE_FILTERS = {
   },
 };
 
-function scoreResult(result, profileId) {
+// Schritt 1: Nur Keyword-Scoring (kein Standortfilter hier — Ort kommt oft erst aus Detail-Fetch)
+function scoreKeywords(result, profileId) {
   const text = `${result.title} ${result.snippet || ""}`.toLowerCase();
   const filter = PROFILE_FILTERS[profileId];
   if (!filter) return 1;
-
-  // Harte Ausschlüsse (Profil)
+  // Harte Keyword-Ausschlüsse
   for (const ex of filter.exclude) {
     if (new RegExp(ex, "i").test(text)) return -1;
   }
-
-  // Standort-Whitelist: MUSS Remote ODER Großraum München/Dorfen enthalten — sonst sofort raus
-  const hasOkLocation = LOCATION_OK.some(loc => text.includes(loc));
-  if (!hasOkLocation) return 0; // Würselen, Aachen, irgendwo in DE → raus (score 0 → gefiltert)
-
-  const hasBadLocation = LOCATION_EXCLUDE.some(loc => text.includes(loc));
-
-  // Explizit schlechte Stadt (z.B. Berlin) UND kein Remote → disqualifiziert
-  if (hasBadLocation && !text.includes("remote") && !text.includes("homeoffice") && !text.includes("home office")) return -1;
-
-  let score = 2; // Standort-Bonus (hasOkLocation bereits geprüft)
+  let score = 0;
   for (const inc of filter.include) {
     if (text.includes(inc.toLowerCase())) score++;
   }
   return score;
+}
+
+// Schritt 2: Standortfilter nach Detail-Fetch auf angereichertem Text
+function passesLocationFilter(enriched) {
+  const text = `${enriched.title || ""} ${enriched.company || ""} ${enriched.location || ""} ${enriched.snippet || ""}`.toLowerCase();
+  const hasOkLocation = LOCATION_OK.some(loc => text.includes(loc));
+  if (!hasOkLocation) return false;
+  const hasBadLocation = LOCATION_EXCLUDE.some(loc => text.includes(loc));
+  if (hasBadLocation && !text.includes("remote") && !text.includes("homeoffice") && !text.includes("home office")) return false;
+  return true;
 }
 
 const PROFILES = [
@@ -299,31 +300,44 @@ async function runSearch(profile, webSearch, makeLLMClient) {
   }
 
   if (allRaw.length === 0) {
+    console.log(`[JOB-CRAWLER] ${profile.label}: 0 Suchergebnisse gefunden.`);
     return "Keine Suchergebnisse gefunden.";
   }
 
-  // Keyword-Scoring: nur Treffer die zum Profil passen
-  const scored = allRaw
-    .map(r => ({ ...r, score: scoreResult(r, profile.id) }))
+  // ── Stufe 1: Keyword-Filter (Standort noch NICHT prüfen — Ort fehlt oft im Snippet) ──
+  const keywordScored = allRaw
+    .map(r => ({ ...r, score: scoreKeywords(r, profile.id) }))
     .filter(r => r.score > 0)
     .sort((a, b) => b.score - a.score);
 
-  console.log(`[JOB-CRAWLER] ${profile.label}: ${allRaw.length} gefunden → ${scored.length} nach Filterung`);
+  console.log(`[JOB-CRAWLER] ${profile.label}: ${allRaw.length} gefunden → ${keywordScored.length} nach Keyword-Filter`);
 
-  if (scored.length === 0) return "Keine passenden Stellen gefunden.";
+  if (keywordScored.length === 0) return "Keine Stellen mit passenden Keywords.";
 
-  // Top-Treffer: Detail-URLs direkt fetchen für echte Stelleninhalte
-  const top = scored.slice(0, 12);
+  // ── Stufe 2: Detail-URLs fetchen (LD+JSON liefert echten Standort) ──
+  const top = keywordScored.slice(0, 15);
   const enriched = await Promise.all(top.map(async (r) => {
     if (isDetailUrl(r.url)) {
       console.log(`[JOB-CRAWLER] Fetch Detail: ${r.url}`);
       const detail = await fetchJobDetail(r.url, r.title);
-      if (detail) return { ...r, title: detail.title || r.title, company: detail.company, location: detail.location, snippet: detail.snippet };
+      if (detail) return { ...r, title: detail.title || r.title, company: detail.company || r.company, location: detail.location || r.location, snippet: detail.snippet || r.snippet };
     }
     return r;
   }));
 
-  return enriched.map(r =>
+  // ── Stufe 3: Standortfilter auf angereichertem Text ──
+  const locationFiltered = enriched.filter(r => passesLocationFilter(r));
+
+  console.log(`[JOB-CRAWLER] ${profile.label}: ${enriched.length} nach Detail-Fetch → ${locationFiltered.length} nach Standortfilter`);
+
+  if (locationFiltered.length === 0) {
+    // Debug: zeige was rausgefiltert wurde
+    const sample = enriched.slice(0, 3).map(r => `"${r.title}" (${r.location || "kein Ort"})`).join(", ");
+    console.log(`[JOB-CRAWLER] ${profile.label}: Alle rausgefiltert. Beispiele: ${sample}`);
+    return "Keine passenden Stellen in der Region (Remote/München-Gebiet).";
+  }
+
+  return locationFiltered.map(r =>
     `Titel: ${r.title}${r.company ? ` — ${r.company}` : ""}${r.location ? ` (${r.location})` : ""}\nURL: ${r.url}\nBeschreibung: ${(r.snippet || "").slice(0, 250)}`
   ).join("\n---\n");
 }
