@@ -52,17 +52,45 @@ export async function sendPush(payload) {
   }
 }
 
+const CHECKIN_MESSAGES = [
+  "Ich bin verfügbar — soll ich etwas für dich tun?",
+  "Kann ich dir helfen? Gib mir eine Aufgabe oder schreib 'Nein'.",
+  "Bereit für neue Aufgaben. Was soll ich erledigen?",
+  "Ich warte auf Anweisungen — soll ich aktiv werden?",
+  "Check-in: Gibt es etwas, das ich für dich recherchieren oder erledigen soll?",
+];
+
 // Stündlicher Check-in
 let checkinInterval = null;
-export function startCheckin() {
+export async function startCheckin() {
   if (checkinInterval) return;
-  checkinInterval = setInterval(async () => {
+
+  // Sofort einmal beim Start
+  await _doCheckin();
+
+  checkinInterval = setInterval(_doCheckin, 60 * 60 * 1000); // jede Stunde
+  console.log("[CHECKIN] Stündlicher Check-in gestartet.");
+}
+
+async function _doCheckin() {
+  const msg = CHECKIN_MESSAGES[Math.floor(Math.random() * CHECKIN_MESSAGES.length)];
+
+  // In Inbox schreiben (immer — auch ohne PWA)
+  try {
+    const { addInboxMessage } = await import("./agent.js");
+    await addInboxMessage("assistant", msg);
+    console.log("[CHECKIN] Inbox-Nachricht:", new Date().toLocaleString("de-DE"));
+  } catch (e) {
+    console.warn("[CHECKIN] Inbox-Write fehlgeschlagen:", e.message);
+  }
+
+  // Push-Notification zusätzlich (nur wenn Subscriptions vorhanden)
+  if (subscriptions.length) {
     await sendPush({
       title: "ESO Bot",
-      body: "Kann ich dir helfen? Tippe Ja um eine Aufgabe zu vergeben.",
-      url: "/agent?checkin=yes"
+      body: msg,
+      url: "/inbox"
     });
     console.log("[CHECKIN] Push gesendet:", new Date().toLocaleString("de-DE"));
-  }, 60 * 60 * 1000); // jede Stunde
-  console.log("[CHECKIN] Stündlicher Check-in gestartet.");
+  }
 }

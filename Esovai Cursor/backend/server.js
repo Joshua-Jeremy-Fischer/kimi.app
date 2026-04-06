@@ -427,8 +427,7 @@ app.post("/api/push/checkin-response", (req, res) => {
 
 app.listen(process.env.PORT || 3010, async () => {
   await loadSubscriptions();
-  if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
-    startCheckin();
-  }
+  // Check-in läuft immer (Inbox), Push nur wenn VAPID-Keys vorhanden
+  await startCheckin();
   console.log(`✓ Backend | Default-Provider: ${DEFAULT_PROVIDER} | Model: ${PROVIDER_REGISTRY[DEFAULT_PROVIDER].getModel()}`);
 });
