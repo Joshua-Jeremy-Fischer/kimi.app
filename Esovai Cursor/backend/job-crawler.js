@@ -452,8 +452,6 @@ async function runSearch(profile, webSearch, makeLLMClient) {
   }
   console.log(`[JOB-CRAWLER] ${profile.label}: ${allRaw.length} gesamt (SearXNG + Browser)`);
 
-  }
-
   if (allRaw.length === 0) {
     console.log(`[JOB-CRAWLER] ${profile.label}: 0 Suchergebnisse gefunden.`);
     return "Keine Suchergebnisse gefunden.";
