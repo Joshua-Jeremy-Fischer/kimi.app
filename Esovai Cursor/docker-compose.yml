@@ -89,9 +89,6 @@ services:
       - SEARXNG_BASE_URL=http://kimi-searxng:8080
     volumes:
       - ./searxng/settings.yml:/etc/searxng/settings.yml
-    cap_drop: [ALL]
-    security_opt:
-      - no-new-privileges:true
     networks:
       - app-net
 

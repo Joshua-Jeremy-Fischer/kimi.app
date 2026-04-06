@@ -1,4 +1,9 @@
-use_default_settings: true
+use_default_settings:
+  engines:
+    keep_only:
+      - google
+      - duckduckgo
+      - bing
 
 general:
   instance_name: "KimiSearch"
@@ -7,45 +12,14 @@ general:
 server:
   port: 8080
   bind_address: "0.0.0.0"
-  secret_key: "kimi-searxng-secret-key-change-in-prod"
+  secret_key: "kimi-searxng-secret-42x"
   limiter: false
   public_instance: false
 
-ui:
-  static_use_hash: false
-
 search:
   safe_search: 0
-  autocomplete: ""
-  default_lang: "de"
-  ban_time_on_fail: 5
-  max_ban_time_on_fail: 120
+  default_lang: "de-DE"
 
 outgoing:
   request_timeout: 10.0
   max_request_timeout: 15.0
-  useragent_suffix: ""
-  pool_connections: 100
-  pool_maxsize: 20
-
-engines:
-  - name: google
-    engine: google
-    language: de
-    region: de-DE
-    shortcut: g
-    weight: 3
-
-  - name: bing
-    engine: bing
-    language: de
-    region: de-DE
-    shortcut: bi
-    weight: 2
-
-  - name: duckduckgo
-    engine: duckduckgo
-    language: de
-    region: de-de
-    shortcut: ddg
-    weight: 1
