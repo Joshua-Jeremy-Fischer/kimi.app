@@ -488,6 +488,7 @@ export function createAgentRouter() {
     if (!content?.trim()) return res.status(400).json({ error: "content fehlt" });
 
     const userMsg = content.trim();
+    const webMode = req.body.webMode === true;
     await addInboxMessage("user", userMsg);
 
     // Erkennen ob User ins Postfach speichern will
@@ -497,9 +498,9 @@ export function createAgentRouter() {
       const { client, model } = makeLLMClient();
       const history = await readInbox();
 
-      // Pre-Search Injection
+      // Pre-Search Injection — nur wenn User den Globe-Button aktiviert hat
       let searchContext = "";
-      if (perms.web) {
+      if (webMode && perms.web) {
         try {
           const sr = await webSearch(userMsg.slice(0, 200));
           if (sr.results?.length) {
@@ -515,10 +516,9 @@ export function createAgentRouter() {
         }
       }
 
-      const hasWeb = perms.web;
       const systemPrompt =
         `Du bist ESO Bot, ein persönlicher KI-Assistent. Antworte hilfreich, präzise und auf Deutsch.` +
-        (hasWeb ? ` Du hast Zugriff auf aktuelle Web-Suchergebnisse die dir unten bereitgestellt werden — nutze sie aktiv für deine Antwort und weise darauf hin wenn du aktuelle Infos verwendest.` : "") +
+        (searchContext ? ` Nutze die unten bereitgestellten Web-Suchergebnisse aktiv für deine Antwort und weise darauf hin wenn du aktuelle Infos verwendest.` : "") +
         searchContext;
 
       const msgs = [
