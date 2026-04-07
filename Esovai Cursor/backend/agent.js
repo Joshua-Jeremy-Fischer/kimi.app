@@ -5,6 +5,7 @@ import fs from "fs/promises";
 import OpenAI from "openai";
 import { startJobCrawler, crawlJobs, getJobResults } from "./job-crawler.js";
 import { startMonitor, getMonitorStatus } from "./monitor.js";
+import { startScheduler, createTask, listTasks, deleteTask } from "./scheduler.js";
 import { chromium } from "playwright-core";
 import nodemailer from "nodemailer";
 
@@ -273,6 +274,45 @@ const TOOLS = {
       },
     },
   }],
+  scheduler: [
+    {
+      type: "function",
+      function: {
+        name: "schedule_task",
+        description: "Plant eine Aufgabe zu einem bestimmten Zeitpunkt. Parst natürliche Zeitangaben wie 'in 30 Minuten', 'um 15:20', 'morgen um 8 Uhr'. Die Aufgabe wird dann automatisch ausgeführt und das Ergebnis ins Postfach geschrieben.",
+        parameters: {
+          type: "object",
+          properties: {
+            instruction: { type: "string", description: "Was soll getan werden? (z.B. 'Recherchiere aktuelle IT-Security News')" },
+            executeAt:   { type: "string", description: "ISO 8601 Zeitpunkt (z.B. '2025-01-15T15:20:00.000Z')" },
+            repeat:      { type: "string", enum: ["daily", "hourly", "weekly"], description: "Wiederholung (optional)" },
+            sendEmail:   { type: "string", description: "E-Mail-Adresse für Ergebnis (optional)" },
+          },
+          required: ["instruction", "executeAt"],
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "list_tasks",
+        description: "Listet alle geplanten Aufgaben auf.",
+        parameters: { type: "object", properties: {} },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "delete_task",
+        description: "Löscht einen geplanten Task anhand seiner ID.",
+        parameters: {
+          type: "object",
+          properties: { id: { type: "string", description: "Task-ID" } },
+          required: ["id"],
+        },
+      },
+    },
+  ],
   postfach: [{
     type: "function",
     function: {
@@ -426,6 +466,23 @@ async function executeTool(name, args) {
       }
       case "write_postfach": {
         await addPostfachEntry(args.title, args.content, args.type || "info");
+        return { ok: true };
+      }
+      case "schedule_task": {
+        const task = await createTask({
+          instruction: args.instruction,
+          executeAt:   args.executeAt,
+          repeat:      args.repeat || null,
+          sendEmail:   args.sendEmail || null,
+        });
+        return { ok: true, task };
+      }
+      case "list_tasks": {
+        const tasks = await listTasks();
+        return { tasks };
+      }
+      case "delete_task": {
+        await deleteTask(args.id);
         return { ok: true };
       }
       case "send_email": {
@@ -653,6 +710,7 @@ export function createAgentRouter() {
           ...(perms.browser    ? TOOLS.browser    : []),
           ...(perms.email     ? TOOLS.email      : []),
           ...TOOLS.postfach,
+          ...TOOLS.scheduler,
         ];
         void tools; // nur für executeTool-Pfad relevant
 
@@ -832,6 +890,13 @@ Du arbeitest **autonom und proaktiv**:
 Wenn Joshua sagt "Bewirb dich für die Stelle" oder "Schreib eine Bewerbung", führe den Bewerbungs-Workflow oben aus.
 Wenn Joshua sagt "Schreib eine E-Mail", verfasst du den vollständigen Text und fragst ob du absenden sollst.
 
+## Task-Scheduler (IMMER verfügbar)
+Du kannst Aufgaben zu beliebigen Zeitpunkten einplanen. Nutze schedule_task() wenn Joshua sagt "in X Minuten", "um HH:MM", "morgen um X Uhr", "täglich um X", etc.
+Rechne die Zeit SELBST aus und übergib einen korrekten ISO-String an executeAt.
+Beispiel: "in 30 Minuten" = jetzt + 30min als ISO. "um 15:20" = heute 15:20 Uhr als ISO (falls schon vorbei: morgen).
+Nach dem Einplanen kurz bestätigen: "Ok, ich recherchiere das um 15:20 Uhr und schreibe das Ergebnis ins Postfach."
+Tools: schedule_task(instruction, executeAt, repeat?, sendEmail?) | list_tasks() | delete_task(id)
+
 ## Internes Postfach (IMMER verfügbar)
 Du hast jederzeit Zugriff auf das interne Postfach von Joshua — das ist seine Benachrichtigungszentrale in der App.
 **Tool:** write_postfach(title, content, type)
@@ -949,6 +1014,32 @@ ${searchContext ? `\n## Aktuelle Recherche-Daten (${today})\n${searchContext.rep
 
   // SOC Monitor starten
   startMonitor(addPostfachEntry);
+
+  // Flexibler Task-Scheduler starten
+  startScheduler({
+    webSearch,
+    addPostfach: addPostfachEntry,
+    sendEmail: async (to, subject, body) => {
+      const { client, model } = makeLLMClient();
+      void model;
+      const smtpConfig = {
+        host: process.env.SMTP_HOST || "smtp.gmail.com",
+        port: parseInt(process.env.SMTP_PORT || "587"),
+        secure: false,
+        auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+      };
+      if (!smtpConfig.auth.user || !smtpConfig.auth.pass) throw new Error("SMTP nicht konfiguriert");
+      const nodemailerMod = await import("nodemailer");
+      const transporter = nodemailerMod.default.createTransport(smtpConfig);
+      await transporter.sendMail({ from: `"Joshua Fischer" <${smtpConfig.auth.user}>`, to, subject, text: body });
+    },
+    makeLLMClient: () => {
+      const { client, model } = makeLLMClient();
+      // scheduler reads client._options.model
+      try { client._options = Object.assign(client._options || {}, { model }); } catch {}
+      return client;
+    },
+  });
 
   // Permissions aus Disk laden
   loadPerms();
