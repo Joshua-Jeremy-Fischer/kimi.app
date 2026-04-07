@@ -273,6 +273,22 @@ const TOOLS = {
       },
     },
   }],
+  postfach: [{
+    type: "function",
+    function: {
+      name: "write_postfach",
+      description: "Schreibe einen Eintrag ins interne Postfach (Benachrichtigungszentrale). Nutze das für Zusammenfassungen, Recherche-Ergebnisse, Alerts oder alles was Joshua später nachlesen soll.",
+      parameters: {
+        type: "object",
+        properties: {
+          title: { type: "string", description: "Titel des Eintrags (kurz, max 80 Zeichen)" },
+          content: { type: "string", description: "Inhalt des Eintrags (Markdown erlaubt)" },
+          type: { type: "string", enum: ["info", "jobs", "warning", "alert"], description: "Typ des Eintrags" },
+        },
+        required: ["title", "content"],
+      },
+    },
+  }],
   email: [{
     type: "function",
     function: {
@@ -407,6 +423,10 @@ async function executeTool(name, args) {
           cwd: "/data",
         });
         return { output: stdout.slice(0, 8000) };
+      }
+      case "write_postfach": {
+        await addPostfachEntry(args.title, args.content, args.type || "info");
+        return { ok: true };
       }
       case "send_email": {
         if (!perms.email) return { error: "Email permission not granted" };
@@ -632,6 +652,7 @@ export function createAgentRouter() {
           ...(perms.git        ? TOOLS.git        : []),
           ...(perms.browser    ? TOOLS.browser    : []),
           ...(perms.email     ? TOOLS.email      : []),
+          ...TOOLS.postfach,
         ];
         void tools; // nur für executeTool-Pfad relevant
 
@@ -810,6 +831,16 @@ Du arbeitest **autonom und proaktiv**:
 
 Wenn Joshua sagt "Bewirb dich für die Stelle" oder "Schreib eine Bewerbung", führe den Bewerbungs-Workflow oben aus.
 Wenn Joshua sagt "Schreib eine E-Mail", verfasst du den vollständigen Text und fragst ob du absenden sollst.
+
+## Internes Postfach (IMMER verfügbar)
+Du hast jederzeit Zugriff auf das interne Postfach von Joshua — das ist seine Benachrichtigungszentrale in der App.
+**Tool:** `write_postfach(title, content, type)`
+Nutze es aktiv:
+- Wenn du eine Recherche abgeschlossen hast → Ergebnis ins Postfach schreiben
+- Wenn du einen Job gefunden hast → Job-Details ins Postfach
+- Wenn etwas Wichtiges passiert ist → Alert ins Postfach
+- Wenn Joshua sagt "schreib das ins Postfach" oder "merk dir das" → `write_postfach` aufrufen
+Joshua sieht das Postfach unter dem 📬-Tab in der App.
 
 ---
 
