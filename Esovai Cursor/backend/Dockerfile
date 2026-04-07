@@ -17,7 +17,7 @@ COPY package*.json ./
 # npm ci bevorzugt (benötigt package-lock.json); fallback: npm install --omit=dev
 RUN if [ -f package-lock.json ]; then npm ci --omit=dev; else npm install --omit=dev; fi
 
-COPY server.js agent.js auth.js push.js job-crawler.js ./
+COPY server.js agent.js auth.js push.js job-crawler.js monitor.js ./
 COPY scripts/ ./scripts/
 
 # FIM-Hashes beim Build (kein mehrzeiliges RUN node -e — das bricht den Dockerfile-Parser)
