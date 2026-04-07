@@ -294,8 +294,12 @@ app.post("/api/chat", async (req, res) => {
       max_tokens,
     });
 
+    const cleanContent = (response.choices[0].message.content || "")
+      .replace(/<think>[\s\S]*?<\/think>/gi, "")
+      .replace(/<\/?think>/gi, "")
+      .trim();
     res.json({
-      content: response.choices[0].message.content,
+      content: cleanContent,
       usage: response.usage,
       provider: providerName,
       model,

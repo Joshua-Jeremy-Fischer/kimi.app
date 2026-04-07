@@ -883,7 +883,12 @@ ${searchContext ? `\n## Aktuelle Recherche-Daten (${today})\n${searchContext.rep
         ...history.slice(-20).map(m => ({ role: m.role === "agent" ? "assistant" : m.role, content: m.content }))
       ];
       const response = await client.chat.completions.create({ model, messages: msgs, max_tokens: 2000 });
-      const reply = response.choices[0].message.content;
+      const rawReply = response.choices[0].message.content;
+      // Thinking-Tags entfernen (<think>...</think> und verbleibende </think> Tags)
+      const reply = rawReply
+        .replace(/<think>[\s\S]*?<\/think>/gi, "")
+        .replace(/<\/?think>/gi, "")
+        .trim();
 
       // Postfach-Action: wenn User ins Postfach speichern wollte, auch wirklich speichern
       if (wantsPostfach) {
