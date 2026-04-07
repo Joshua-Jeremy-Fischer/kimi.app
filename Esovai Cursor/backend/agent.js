@@ -839,7 +839,7 @@ Nutze es aktiv:
 - Wenn du eine Recherche abgeschlossen hast → Ergebnis ins Postfach schreiben
 - Wenn du einen Job gefunden hast → Job-Details ins Postfach
 - Wenn etwas Wichtiges passiert ist → Alert ins Postfach
-- Wenn Joshua sagt "schreib das ins Postfach" oder "merk dir das" → `write_postfach` aufrufen
+- Wenn Joshua sagt "schreib das ins Postfach" oder "merk dir das" → write_postfach aufrufen
 Joshua sieht das Postfach unter dem 📬-Tab in der App.
 
 ---
