@@ -13,6 +13,27 @@ const CHROMIUM_PATH = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || "/usr/b
 
 const execAsync = promisify(exec);
 
+// ── Optional: Remote tool runner (eso-bot) ────────────────────
+const ESO_BOT_BASE_URL = (process.env.AGENT_BASE_URL || "").trim().replace(/\/$/, "");
+const ESO_BOT_TOKEN = (process.env.ESO_BOT_TOKEN || "").trim();
+
+async function esoBotCall(path, body) {
+  if (!ESO_BOT_BASE_URL) throw new Error("AGENT_BASE_URL fehlt (eso-bot nicht konfiguriert)");
+  if (!ESO_BOT_TOKEN) throw new Error("ESO_BOT_TOKEN fehlt (eso-bot Auth)");
+  const r = await fetch(`${ESO_BOT_BASE_URL}${path}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${ESO_BOT_TOKEN}`,
+    },
+    body: JSON.stringify(body || {}),
+    signal: AbortSignal.timeout(30_000),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) return { error: data?.error || `eso-bot error (${r.status})` };
+  return data;
+}
+
 // ── Agent Inbox ────────────────────────────────────────────
 const INBOX_FILE = "/data/agent-inbox.json";
 
@@ -421,6 +442,7 @@ async function executeTool(name, args) {
     switch (name) {
       case "bash": {
         if (!perms.shell) return { error: "Shell permission not granted" };
+        if (ESO_BOT_BASE_URL) return await esoBotCall("/tools/bash", { command: args.command ?? "" });
         const { stdout, stderr } = await execAsync(args.command ?? "", {
           timeout: 30_000,
           cwd: "/data",
@@ -434,24 +456,28 @@ async function executeTool(name, args) {
       }
       case "web_fetch": {
         if (!perms.web) return { error: "Web permission not granted" };
+        if (ESO_BOT_BASE_URL) return await esoBotCall("/tools/web_fetch", { url: args.url });
         const r = await fetch(args.url, { signal: AbortSignal.timeout(15_000) });
         const text = await r.text();
         return { status: r.status, content: text.slice(0, 20_000) };
       }
       case "read_file": {
         if (!perms.fileSystem) return { error: "File system permission not granted" };
+        if (ESO_BOT_BASE_URL) return await esoBotCall("/tools/read_file", { path: args.path });
         const p = (args.path ?? "").startsWith("/") ? args.path : `/data/${args.path}`;
         const content = await fs.readFile(p, "utf8");
         return { content: content.slice(0, 50_000) };
       }
       case "write_file": {
         if (!perms.fileSystem) return { error: "File system permission not granted" };
+        if (ESO_BOT_BASE_URL) return await esoBotCall("/tools/write_file", { path: args.path, content: args.content ?? "" });
         const p = (args.path ?? "").startsWith("/") ? args.path : `/data/${args.path}`;
         await fs.writeFile(p, args.content ?? "", "utf8");
         return { ok: true, path: p };
       }
       case "list_files": {
         if (!perms.fileSystem) return { error: "File system permission not granted" };
+        if (ESO_BOT_BASE_URL) return await esoBotCall("/tools/list_files", { path: args.path || "." });
         const p = args.path || "/data";
         const entries = await fs.readdir(p, { withFileTypes: true });
         return { files: entries.map(e => ({ name: e.name, type: e.isDirectory() ? "dir" : "file" })) };

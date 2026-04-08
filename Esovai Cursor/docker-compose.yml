@@ -92,6 +92,29 @@ services:
     networks:
       - app-net
 
+  eso-bot:
+    build: ./eso-bot
+    container_name: eso-bot
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      AGENT_PORT: "3020"
+      SANDBOX_ROOT: /workspace
+      # Defaults (kannst du in .env überschreiben)
+      ALLOW_SHELL: "${ALLOW_SHELL:-false}"
+      ALLOW_WEB: "${ALLOW_WEB:-true}"
+      ALLOW_FILES: "${ALLOW_FILES:-true}"
+      ALLOW_GIT: "${ALLOW_GIT:-false}"
+    volumes:
+      - eso_workspace:/workspace
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=10m,mode=1777
+    networks:
+      - app-net
+
 networks:
   app-net:
     driver: bridge
@@ -99,3 +122,4 @@ networks:
 volumes:
   ollama_data:
   kimi_data:
+  eso_workspace:
