@@ -728,12 +728,16 @@ export function createAgentRouter() {
         }
       }
 
-      const _now = new Date();
-      const today = _now.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric" });
-      const todayTime = today + ", " + _now.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" }) + " Uhr (Europe/Berlin)";
+      // Inbox hat KEINE Tools: keine Tool-Liste in den System-Prompt schreiben,
+      // sonst halluziniert das Modell Tool-/XML-Syntax.
+      const now = new Date();
+      const today = now.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric" });
+      const nowStr =
+        `${today}, ` +
+        `${now.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })} Uhr (Europe/Berlin)`;
 
       const systemPrompt = `Du bist ESO Bot — der persönliche autonome Agent von Joshua Fischer.
-Datum & Uhrzeit: ${todayTime}
+Datum: ${nowStr}
 
 ## Über Joshua (dein Nutzer)
 - **Name:** Joshua Fischer
@@ -854,7 +858,7 @@ POST /api/agent/tasks
 { "instruction": "...", "executeAt": "ISO-8601", "repeat": null }
 \`\`\`
 
-Berechne "executeAt" aus der genannten Uhrzeit + heutigem Datum (${today}).
+Berechne "executeAt" aus der genannten Uhrzeit + heutigem Datum (${nowStr}).
 Beispiel: "um 13:40" → executeAt = "${new Date().toISOString().slice(0,10)}T13:40:00.000Z" (angepasst an lokale Zeitzone: Europe/Berlin = UTC+2 → 11:40 UTC).
 
 Bestätige mit: "Task angelegt — ich recherchiere und schreibe dir um [Zeit] in die Inbox."
@@ -916,23 +920,30 @@ ${searchContext ? `\n## Aktuelle Recherche-Daten (${today})\n${searchContext.rep
           console.warn("[Inbox] Task-Anlage fehlgeschlagen:", e.message);
         }
       } else {
-        // Fallback: Uhrzeit im User-Prompt direkt erkennen (z.B. "um 13:40")
-        const timeMatch = userMsg.match(/um\s+(\d{1,2})[:\.](\d{2})\s*uhr?/i);
-        const hasScheduleIntent = /später|um \d|schreib.*mir.*um|sende.*um|erinner|um \d{1,2}[:.]\d{2}/i.test(userMsg);
+        // Fallback: Zeitangabe im User-Prompt erkennen — absolut ("um 13:40") oder relativ ("in 3 Minuten" / "[jetzt+3min]")
+        const timeMatch    = userMsg.match(/um\s+(\d{1,2})[:\.](\d{2})\s*uhr?/i);
+        const relMatch     = userMsg.match(/(?:in|\[jetzt\+)\s*(\d+)\s*min(?:uten?)?\]?/i);
+        const hasScheduleIntent = /später|um \d|schreib.*mir.*um|sende.*um|erinner|um \d{1,2}[:.]\d{2}|in \d+\s*min|jetzt\+/i.test(userMsg);
+
+        let execLocal = null;
+        const now = new Date();
+        const offsetMs = 2 * 60 * 60 * 1000; // Europe/Berlin UTC+2 (Sommerzeit)
+
         if (timeMatch && hasScheduleIntent) {
           const [, hh, mm] = timeMatch;
-          const now = new Date();
-          const exec = new Date(now);
-          exec.setHours(parseInt(hh, 10), parseInt(mm, 10), 0, 0);
-          // Falls Uhrzeit bereits vorbei ist → morgen
-          if (exec <= now) exec.setDate(exec.getDate() + 1);
-          // Zeitzone Europe/Berlin (UTC+2 Sommerzeit / UTC+1 Winter)
-          const offsetMs = 2 * 60 * 60 * 1000; // vereinfacht UTC+2
-          const execUTC = new Date(exec.getTime() - offsetMs);
+          execLocal = new Date(now);
+          execLocal.setHours(parseInt(hh, 10), parseInt(mm, 10), 0, 0);
+          if (execLocal <= now) execLocal.setDate(execLocal.getDate() + 1);
+        } else if (relMatch && hasScheduleIntent) {
+          const minutes = parseInt(relMatch[1], 10);
+          execLocal = new Date(now.getTime() + minutes * 60 * 1000);
+        }
+
+        if (execLocal) {
+          const execUTC = new Date(execLocal.getTime() - offsetMs);
           try {
             const task = await createTask({ instruction: userMsg.trim(), executeAt: execUTC.toISOString(), repeat: null, sendEmail: null });
-            const uhrzeit = new Date(task.executeAt).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Berlin" });
-            reply = `Task angelegt — ich schreibe dir um ${uhrzeit} Uhr in die Inbox.`;
+            reply = `Task angelegt — ich schreibe dir um ${execLocal.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })} Uhr in die Inbox.`;
             console.log(`[Inbox] Fallback-Scheduler-Task angelegt: "${task.instruction}" um ${task.executeAt}`);
           } catch (e) {
             console.warn("[Inbox] Fallback Task-Anlage fehlgeschlagen:", e.message);
