@@ -728,19 +728,12 @@ export function createAgentRouter() {
         }
       }
 
-      // Aktive Tools dem Agenten mitteilen
-      const activeTools = [];
-      if (perms.web)        activeTools.push("web_search / web_fetch — aktuelle Infos aus dem Internet");
-      if (perms.browser)    activeTools.push("browser_navigate / browser_fill / browser_click — echter Browser, navigiert selbst auf Webseiten");
-      if (perms.fileSystem) activeTools.push("read_file / write_file / list_files — Dateien in /data lesen und schreiben");
-      if (perms.shell)      activeTools.push("bash — Bash-Befehle auf dem Server ausführen");
-      if (perms.git)        activeTools.push("git_command — Git-Operationen");
-      if (perms.email)      activeTools.push("send_email — E-Mails versenden");
-
-      const today = new Date().toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric" });
+      const _now = new Date();
+      const today = _now.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric" });
+      const todayTime = today + ", " + _now.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" }) + " Uhr (Europe/Berlin)";
 
       const systemPrompt = `Du bist ESO Bot — der persönliche autonome Agent von Joshua Fischer.
-Datum: ${today}
+Datum & Uhrzeit: ${todayTime}
 
 ## Über Joshua (dein Nutzer)
 - **Name:** Joshua Fischer
@@ -938,6 +931,8 @@ ${searchContext ? `\n## Aktuelle Recherche-Daten (${today})\n${searchContext.rep
           const execUTC = new Date(exec.getTime() - offsetMs);
           try {
             const task = await createTask({ instruction: userMsg.trim(), executeAt: execUTC.toISOString(), repeat: null, sendEmail: null });
+            const uhrzeit = new Date(task.executeAt).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Berlin" });
+            reply = `Task angelegt — ich schreibe dir um ${uhrzeit} Uhr in die Inbox.`;
             console.log(`[Inbox] Fallback-Scheduler-Task angelegt: "${task.instruction}" um ${task.executeAt}`);
           } catch (e) {
             console.warn("[Inbox] Fallback Task-Anlage fehlgeschlagen:", e.message);
