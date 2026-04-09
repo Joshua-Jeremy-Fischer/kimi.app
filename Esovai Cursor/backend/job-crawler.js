@@ -171,10 +171,13 @@ async function runSearch(profile, webSearch, makeLLMClient) {
     return "Keine Suchergebnisse gefunden.";
   }
 
-  const { client, model } = makeLLMClient();
+  const crawlerModelOverride = (process.env.JOB_CRAWLER_MODEL || "").trim() || undefined;
+  const { client, model } = makeLLMClient(crawlerModelOverride);
   try {
     const systemContent = profile.systemPrompt +
-      "\n\nAntworte ausschließlich als reiner Text im vorgegebenen Format. Keine Tool-Aufrufe, kein JSON, keine Code-Blöcke.";
+      "\n\nWICHTIG: Du hast KEINE Tools verfügbar. Antworte AUSSCHLIESSLICH mit reinem Text im vorgegebenen Format. " +
+      "Keine Tool-/Funktionsaufrufe, kein JSON, keine Code-Blöcke, keine Markdown-Blöcke. " +
+      "Antworte ohne lange Gedankengänge: direkt Ergebniszeilen. Wenn du Platz brauchst, kürze statt abzubrechen.";
 
     const buildMessages = (limit) => ([
       { role: "system", content: systemContent },
@@ -199,19 +202,35 @@ async function runSearch(profile, webSearch, makeLLMClient) {
       },
     ]);
 
+    async function createCompletion(opts) {
+      // Defense-in-depth: Falls das Modell trotzdem tool_calls zurückgibt, versuchen wir Tool-Calling hart zu deaktivieren.
+      // Nicht alle Ollama/OpenAI-Compat-Server akzeptieren tools:[]/tool_choice:"none" → deshalb Fallback.
+      try {
+        return await client.chat.completions.create({
+          ...opts,
+          tools: [],
+          tool_choice: "none",
+        });
+      } catch (e) {
+        console.warn("[JOB-CRAWLER] tool_choice=none nicht unterstützt, fallback ohne tools:", e.message);
+        return await client.chat.completions.create(opts);
+      }
+    }
+
     // Kimi K2.5 liefert manchmal leeres content (tool_calls statt Text).
     // Strategie: sinkende Snippet-Limits, jeder Versuch ist ein frischer Call — kein
     // choice.message mit tool_calls in messages mitschleppen (bricht OpenAI-compat APIs).
     const attempts = [
-      { limit: 10, max_tokens: 800, temperature: 0.2 },
-      { limit: 5,  max_tokens: 600, temperature: 0.1 },
-      { limit: 3,  max_tokens: 400, temperature: 0.1 },
+      { limit: 10, max_tokens: 1800, temperature: 0.1 },
+      { limit: 5,  max_tokens: 1400, temperature: 0.1 },
+      { limit: 3,  max_tokens: 1000, temperature: 0.0 },
     ];
 
     for (const { limit, max_tokens, temperature } of attempts) {
-      const response = await client.chat.completions.create({
+      const baseMessages = buildMessages(limit);
+      const response = await createCompletion({
         model,
-        messages: buildMessages(limit),
+        messages: baseMessages,
         temperature,
         max_tokens,
       });
@@ -222,6 +241,26 @@ async function runSearch(profile, webSearch, makeLLMClient) {
       const finish = choice?.finish_reason || "unknown";
       const hasToolCalls = !!choice?.message?.tool_calls?.length;
       console.warn(`[JOB-CRAWLER] Leere Antwort (${profile.id}) finish=${finish} tool_calls=${hasToolCalls} limit=${limit} — nächster Versuch`);
+
+      // Wenn das Modell tool_calls liefern will, geben wir in demselben Versuch einen "Text-only" Zusatz
+      // (ohne die tool_calls Message wieder einzuspeisen).
+      if (hasToolCalls || finish === "tool_calls") {
+        const response2 = await createCompletion({
+          model,
+          messages: [
+            ...baseMessages,
+            { role: "user", content: "Erinnerung: Du hast KEINE Tools. Antworte jetzt NUR als Text im geforderten Format." },
+          ],
+          temperature: 0.0,
+          max_tokens: Math.min(max_tokens, 600),
+        });
+        const choice2 = response2.choices?.[0];
+        const content2 = (choice2?.message?.content || "").trim();
+        if (content2) return content2;
+        const finish2 = choice2?.finish_reason || "unknown";
+        const hasToolCalls2 = !!choice2?.message?.tool_calls?.length;
+        console.warn(`[JOB-CRAWLER] Text-only Retry leer (${profile.id}) finish=${finish2} tool_calls=${hasToolCalls2} limit=${limit}`);
+      }
     }
 
     return "LLM lieferte eine leere Antwort (200 OK, aber kein content).";
