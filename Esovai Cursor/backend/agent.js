@@ -692,6 +692,18 @@ export function createAgentRouter() {
     res.json({ messages: await readInbox() });
   });
 
+  // Hilfsfunktion: Zeitangabe aus User-Text entfernen → saubere Instruction für den Scheduler
+  function extractInstruction(text) {
+    return text
+      .replace(/\[\s*jetzt\s*\+\s*\d+\s*(?:min|m)\s*\]/gi, "")  // [jetzt+3min]
+      .replace(/\bjetzt\s*\+\s*\d+\s*(?:min|m)\b/gi, "")          // jetzt+3min
+      .replace(/\bin\s+\d+\s*(?:minuten|min|m)\b/gi, "")           // in 3 Minuten
+      .replace(/\bum\s+\d{1,2}[:.]\d{2}\s*uhr?\b/gi, "")          // um 13:40 / um 13:40 Uhr
+      .replace(/\bschreib\s+(?:mir\s+)?(?:eine?\s+)?(?:nachricht\s+)?in\s+die\s+inbox\b/gi, "") // "schreib mir in die Inbox"
+      .replace(/\s{2,}/g, " ")
+      .trim();
+  }
+
   // POST /api/agent/inbox — User schreibt, Agent antwortet (mit Web-Suche + Postfach-Action)
   router.post("/inbox", async (req, res) => {
     const { content } = req.body;
@@ -926,7 +938,7 @@ ${searchContext ? `\n## Aktuelle Recherche-Daten (${today})\n${searchContext.rep
           const mins = Math.max(1, Math.min(24 * 60, parseInt(relMatch[1], 10) || 0));
           const execUTC = new Date(Date.now() + mins * 60_000);
           try {
-            const task = await createTask({ instruction: userMsg.trim(), executeAt: execUTC.toISOString(), repeat: null, sendEmail: null });
+            const task = await createTask({ instruction: extractInstruction(userMsg), executeAt: execUTC.toISOString(), repeat: null, sendEmail: null });
             reply = `Task angelegt — ich schreibe dir um ${new Date(task.executeAt).toLocaleTimeString("de-DE", {
               hour: "2-digit",
               minute: "2-digit",
@@ -951,7 +963,7 @@ ${searchContext ? `\n## Aktuelle Recherche-Daten (${today})\n${searchContext.rep
           const offsetMs = 2 * 60 * 60 * 1000; // vereinfacht UTC+2
           const execUTC = new Date(exec.getTime() - offsetMs);
           try {
-            const task = await createTask({ instruction: userMsg.trim(), executeAt: execUTC.toISOString(), repeat: null, sendEmail: null });
+            const task = await createTask({ instruction: extractInstruction(userMsg), executeAt: execUTC.toISOString(), repeat: null, sendEmail: null });
             reply = `Task angelegt — ich schreibe dir um ${exec.toLocaleTimeString("de-DE", {
               hour: "2-digit",
               minute: "2-digit",

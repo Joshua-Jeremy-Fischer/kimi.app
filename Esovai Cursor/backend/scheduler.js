@@ -32,8 +32,8 @@ async function executeTask(task) {
 
   let result = "";
 
-  // Web-Recherche wenn gewünscht
-  if (webSearchFn && task.instruction.toLowerCase().match(/recherchier|such|news|cve|jobs?|find/i)) {
+  // Web-Recherche immer durchführen (Scheduler-Tasks sind immer recherche-basiert)
+  if (webSearchFn) {
     try {
       const sr = await webSearchFn(task.instruction);
       if (sr?.results?.length) {
