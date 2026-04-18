@@ -5,36 +5,77 @@ const RESULTS_FILE = "/data/jobs.json";
 const INTERVAL_MS  = 6 * 60 * 60 * 1000; // 6 Stunden
 const MAX_RESULTS_PER_PROFILE = 5;
 
-// ─── Arbeitnow API (kostenlos, kein Auth, deutsche Jobs) ─────────────────────
-// Docs: https://arbeitnow.com/api
-const ARBEITNOW_BASE = "https://arbeitnow.com/api/job-board-api";
+// ─── Quelle A: Indeed RSS (kostenlos, kein Auth, individuelle deutsche Jobs) ──
+const INDEED_RSS = "https://de.indeed.com/rss";
 
-async function fetchArbeitnowJobs({ keyword, location, remote = false, page = 1 }) {
-  const params = new URLSearchParams({ page: String(page) });
-  if (keyword)  params.set("search", keyword);
-  if (location) params.set("location", location);
-  if (remote)   params.set("remote", "true");
-
-  const res = await fetch(`${ARBEITNOW_BASE}?${params}`, {
-    headers: { "Accept": "application/json", "User-Agent": "EsoBot-JobCrawler/2.0" },
+async function fetchIndeedRSS(keyword, location, remote = false) {
+  const params = new URLSearchParams({ q: keyword, sort: "date", fromage: "7", lang: "de" });
+  if (location) params.set("l", location);
+  if (remote)   params.set("remotejob", "032b3046331098ca");
+  const res = await fetch(`${INDEED_RSS}?${params}`, {
+    headers: {
+      "User-Agent":      "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
+      "Accept":          "application/rss+xml, text/xml, */*",
+      "Accept-Language": "de-DE,de;q=0.9",
+    },
     signal: AbortSignal.timeout(15_000),
   });
-  if (!res.ok) throw new Error(`Arbeitnow ${res.status}`);
-  const data = await res.json();
-  return data.data || [];
+  if (!res.ok) throw new Error(`Indeed RSS ${res.status}`);
+  return await res.text();
 }
 
-/** Arbeitnow-Job → einheitliches Kandidaten-Objekt */
-function arbeitnowToCandidate(job) {
+/** RSS-XML → Array von rohen Item-Objekten (ohne externe Libs) */
+function parseRSSItems(xml) {
+  const items = [];
+  const re = /<item\b[^>]*>([\s\S]*?)<\/item>/gi;
+  let m;
+  while ((m = re.exec(xml)) !== null) {
+    const block = m[1];
+    const tag = (name) => {
+      const r = new RegExp(`<${name}[^>]*>(?:<!\\[CDATA\\[)?([\\s\\S]*?)(?:\\]\\]>)?<\\/${name}>`, "i");
+      const t = block.match(r);
+      return t ? t[1].trim() : "";
+    };
+    const linkMatch = block.match(/<link>([^<\s][^<]*)<\/link>/i)
+                   || block.match(/<link><!\[CDATA\[([^\]]+)\]\]><\/link>/i);
+    items.push({
+      title:       tag("title"),
+      url:         linkMatch?.[1]?.trim() || tag("guid"),
+      pubDate:     tag("pubDate"),
+      description: tag("description"),
+    });
+  }
+  return items;
+}
+
+/** Indeed-RSS-Item → einheitliches Kandidaten-Objekt */
+function indeedToCandidate(item) {
+  const rawDesc = String(item.description || "");
+  const company = rawDesc.match(/<b>([^<]{2,80})<\/b>/)?.[1]?.trim() || "";
+  const locLine  = rawDesc.replace(/<b>[^<]*<\/b>\s*(?:<br\s*\/?>\s*)?/, "")
+                          .match(/^([^<\n]{3,60})/)?.[1]?.trim() || "";
+  const text = rawDesc
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&[a-z#0-9]+;/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 2000);
+
+  let publishedAt = "";
+  if (item.pubDate) {
+    const d = new Date(item.pubDate);
+    if (!isNaN(d.getTime())) publishedAt = d.toISOString();
+  }
+
   return {
-    source:      "arbeitnow",
-    url:         job.url || `https://arbeitnow.com/jobs/${job.slug}`,
-    title:       job.title || "",
-    company:     job.company_name || "",
-    location:    job.location || "",
-    publishedAt: job.created_at ? new Date(job.created_at * 1000).toISOString() : "",
-    remote:      !!job.remote,
-    text:        (job.description || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 2000),
+    source:      "indeed",
+    url:         item.url,
+    title:       item.title || "",
+    company,
+    location:    locLine,
+    publishedAt,
+    remote:      isRemote(`${item.title} ${text}`),
+    text,
   };
 }
 
@@ -167,7 +208,7 @@ function regexGate(candidate, profile) {
   return 0;
 }
 
-/** Gleiche Regeln wie in fetchFromBA — zentral, damit Merge/Web nie „schlechte“ Titel durchlässt. */
+/** Zentrale Titel-Prüfung — auch SearXNG/Web darf keine unpassenden Titel durchlassen. */
 function titleMatchesProfile(profile, title) {
   const t = String(title || "");
   if (profile.titleInclude && !profile.titleInclude.test(t)) return false;
@@ -184,12 +225,33 @@ function canonicalUrl(url) {
   } catch { return url; }
 }
 
-function isRemote(titleOrText) {
-  return /homeoffice|remote|home.office|bundesweit|deutschlandweit/i.test(titleOrText);
+/** Wie happy-hermann: breiteres Remote-Signal (100% HO, teilweise Remote, …). */
+function isRemoteContext(text) {
+  return /\b(remote|home\s*office|homeoffice|deutschlandweit|bundesweit|100\s*%\s*remote|vollständig\s*remote|teilweise\s*remote)\b/i.test(String(text || ""));
 }
 
+function isRemote(titleOrText) {
+  return isRemoteContext(titleOrText);
+}
+
+/** Weite Pendel-/Ballungsstädte + Landshut/Freising (happy-hermann LOCATION_FAR_OR_BAD). */
+const LOCATION_FAR_OR_BAD =
+  /\b(berlin|hamburg|frankfurt|köln|cologne|koln|stuttgart|düsseldorf|dusseldorf|nürnberg|nuremberg|leipzig|dresden|hannover|bremen|essen|dortmund|landshut|freising)\b/i;
+
 function isLocationBad(text) {
-  return /\b(berlin|hamburg|frankfurt|köln|cologne|stuttgart|düsseldorf|nürnberg|nuremberg|leipzig|dresden|hannover|bremen|essen|dortmund|landshut|freising)\b/i.test(text);
+  return LOCATION_FAR_OR_BAD.test(text);
+}
+
+/**
+ * happy-hermann locationPasses: IT-Support Remote nur mit Remote-Kontext im Volltext;
+ * sonst „weite“ Städte verwerfen, außer Remote signalisiert.
+ */
+function locationPassesCandidate(profile, c) {
+  const text = `${c.title || ""}\n${c.text || ""}\n${c.location || ""}\n${c.url || ""}`;
+  if (profile.id === "it-support-remote") return isRemoteContext(text);
+  if (isRemoteContext(text)) return true;
+  if (LOCATION_FAR_OR_BAD.test(text)) return false;
+  return true;
 }
 
 function isLocationAllowed(profile, locationText, isRemoteRole) {
@@ -280,15 +342,13 @@ const PROFILES = [
   {
     id: "it-security",
     label: "IT Security",
-    baSearches: [
-      // Breite Suche ohne Location-Einschränkung um mehr Treffer zu bekommen
-      ["Security Analyst",       "",            0, false],
-      ["SOC Analyst",            "",            0, false],
-      ["Cybersecurity Analyst",  "",            0, false],
-      ["Information Security",   "",            0, false],
-      ["IT Security Analyst",    "Munich",      0, false],
-      ["IAM Engineer",           "",            0, true],
-      ["Security Operations",    "",            0, false],
+    indeedSearches: [
+      ["SOC Analyst",           "München",     false],
+      ["IT Security Analyst",   "München",     false],
+      ["Cybersecurity Analyst", "München",     false],
+      ["IAM Engineer",          "Deutschland", true],
+      ["Security Analyst",      "München",     false],
+      ["SIEM Analyst",          "Deutschland", true],
     ],
     searxQueries: [
       "SOC Analyst Stelle Muenchen",
@@ -300,16 +360,22 @@ const PROFILES = [
     titleExclude:  /senior|lead|head|architect|principal|manager|direktor|ciso/i,
     locationAllow: /muenchen|munich|erding|dorfen|markt\s?schwaben|poing|trudering|riem|feldkirchen|vaterstetten|baldham|zorneding|ebersberg|muehldorf|mühldorf|rosenheim/i,
     requireRemote: false,
-    systemPrompt:  "Kandidat: IT-Quereinsteiger (kaufm. Hintergrund), Active Directory, Entra ID, Wazuh SIEM, MITRE ATT&CK, IAM, IHK-Zertifizierung Informationssicherheit laufend. KEIN Studium. Ziel: Junior SOC/Security Analyst, IAM/ISMS Junior. Ausschluss: Pflicht-Studium, Senior >3J, reiner Außendienst.",
+    systemPrompt:
+      "ZIELROLLEN: Junior SOC/IT-Security Analyst, ISMS/IAM Junior, Security Admin. " +
+      "Kandidat: IT-Quereinsteiger (kaufm.), AD/Entra, Wazuh/SIEM, MITRE, IAM, Homelab; IHK InfoSec laufend; KEIN Studium. " +
+      "STANDORT: Erding/Dorfen/Mühldorf/Rosenheim/München (ÖPNV) oder deutschlandweit Remote. NICHT Landshut/Freising außer Remote. " +
+      "AUSSCHLUSS: Senior >3J Pflicht, Pflicht-Studium, kein Security-Bezug, Außendienst >30%.",
   },
   {
     id: "kaufmaennisch",
     label: "Kaufmännisch",
-    baSearches: [
-      ["Sachbearbeiter Einkauf",     "München", 50, false],
-      ["Sachbearbeiter Innendienst", "München", 50, false],
-      ["Kaufmännischer Mitarbeiter", "München", 50, false],
-      ["Disponent",                  "München", 50, false],
+    indeedSearches: [
+      ["Sachbearbeiter Innendienst", "München",     false],
+      ["Sachbearbeiter Einkauf",     "München",     false],
+      ["Kaufmännischer Mitarbeiter", "München",     false],
+      ["Disponent",                  "München",     false],
+      ["Kaufmann Innendienst",       "Erding",      false],
+      ["Sachbearbeiter",             "Erding",      false],
     ],
     searxQueries: [
       "Sachbearbeiter Innendienst Stelle Erding Muenchen",
@@ -321,16 +387,21 @@ const PROFILES = [
     titleExclude:  /senior|head|lead|direktor|außendienst|aussendienst|executive|ingenieur|techniker|entwickler|architect|consultant|\bsap\b|s\/4|s4hana|basis[\s-]?consultant|strategic\s+account|key[\s-]?account|account[\s-]?executive|vertriebsingenieur|vertriebsmitarbeiter|sales|account\s+manager|verkehrsüberwachung|verkehrsueberwachung|ordnungsamt|kommunal/i,
     locationAllow: /muenchen|munich|erding|dorfen|markt\s?schwaben|poing|trudering|riem|feldkirchen|vaterstetten|baldham|zorneding|ebersberg|muehldorf|mühldorf|rosenheim/i,
     requireRemote: false,
-    systemPrompt:  "Kandidat: Kaufmann im Groß- und Außenhandel, ERP (WW90/AS400), Stammdatenpflege. Ziel: Sachbearbeiter Einkauf/Vertrieb/Innendienst, Disponent. Ausschluss: reiner Außendienst >20%, reines Lager, Callcenter.",
+    systemPrompt:
+      "ZIELROLLEN: Sachbearbeiter Einkauf/Vertrieb/Auftragsabwicklung, Kaufm. Innendienst, Disponent, ERP/Warenwirtschaft, Junior Sales Coord B2B. " +
+      "Kandidat: Kaufm. Groß-/Außenhandel, ERP WW90/AS400, Stammdaten. " +
+      "STANDORT: Dorfen/Erding/Mühldorf/Rosenheim/München (ÖPNV) oder Remote. NICHT Landshut/Freising ohne Remote. " +
+      "AUSSCHLUSS: Außendienst >20%, reiner Lagerfokus, Callcenter ohne Sachbearbeitung.",
   },
   {
     id: "it-support-remote",
     label: "IT Support Remote",
-    baSearches: [
-      ["IT Support",          "Deutschland", 0, true],
-      ["Technical Support",   "Deutschland", 0, true],
-      ["IT Helpdesk",         "Deutschland", 0, true],
-      ["SaaS Onboarding",     "Deutschland", 0, true],
+    indeedSearches: [
+      ["IT Support Specialist",   "Deutschland", true],
+      ["IT Helpdesk",             "Deutschland", true],
+      ["Technical Support",       "Deutschland", true],
+      ["SaaS Onboarding",         "Deutschland", true],
+      ["Junior IT Consultant",    "Deutschland", true],
     ],
     searxQueries: [
       "IT Support Specialist Remote Deutschland",
@@ -341,47 +412,53 @@ const PROFILES = [
     titleInclude:  /support.specialist|helpdesk|it.support|service.desk|onboarding.specialist|technical.support/i,
     titleExclude:  /senior|lead|head|\bsap\b|s\/4|basis[\s-]?consultant|erp\.?berater|architect|developer|entwickler/i,
     requireRemote: true,
-    systemPrompt:  "Kandidat: Kaufm. Ausbildung mit IT-Bezug, Active Directory, Entra ID, ERP, Cybersecurity-Grundlagen. NUR Remote/Homeoffice. Ziel: IT Support Remote, Helpdesk, SaaS Onboarding, Junior IT Consultant. Ausschluss: Pflicht-Studium, reine Vor-Ort-IT.",
+    systemPrompt:
+      "ZIELROLLEN: IT Support/Helpdesk/Service Desk Remote, Technical Support, SaaS Onboarding, Junior IT Consultant (remote). " +
+      "Kandidat: kaufm. mit IT, AD/Entra, ERP, Security-Grundlagen; KEIN Studium. " +
+      "STANDORT: NUR Remote/Homeoffice DE; max. 2–3 Präsenztage/Monat ok. " +
+      "AUSSCHLUSS: reine Vor-Ort-/Hardware-IT, Senior >3J Pflicht, Pflicht-Studium, Außendienst >20%.",
   },
 ];
 
-// ─── Quelle A: Arbeitnow ──────────────────────────────────────────────────────
-async function fetchFromBA(profile) {
+// ─── Quelle A: Indeed RSS ────────────────────────────────────────────────────
+async function fetchFromIndeed(profile) {
   const seen       = new Set();
   const candidates = [];
 
-  for (const [keyword, location, , remote] of profile.baSearches) {
-    let jobs;
+  for (const [keyword, location, remote] of (profile.indeedSearches || [])) {
+    let xml;
     try {
-      jobs = await fetchArbeitnowJobs({
-        keyword,
-        location: location || undefined,
-        remote:   !!remote || profile.requireRemote,
-      });
+      xml = await fetchIndeedRSS(keyword, location || "", !!remote || !!profile.requireRemote);
     } catch (e) {
-      console.error(`[JOB-CRAWLER] Arbeitnow Fehler (${keyword}): ${e.message}`);
+      console.error(`[JOB-CRAWLER] Indeed RSS Fehler (${keyword}): ${e.message}`);
       continue;
     }
 
-    for (const job of jobs) {
-      const id = job.slug || job.url;
-      if (!id || seen.has(id)) continue;
-      seen.add(id);
+    const items = parseRSSItems(xml);
+    console.log(`[JOB-CRAWLER] Indeed "${keyword}" → ${items.length} Items`);
 
-      const c = arbeitnowToCandidate(job);
+    for (const item of items) {
+      if (!item.url || seen.has(item.url)) continue;
+      seen.add(item.url);
+
+      const c = indeedToCandidate(item);
+      if (!c.url) continue;
       if (!titleMatchesProfile(profile, c.title)) continue;
       if (!isWithin7Days(c.publishedAt)) continue;
-      if (profile.requireRemote && !c.remote) continue;
-      if (!isLocationAllowed(profile, c.location, c.remote)) continue;
-      if (!c.remote && isLocationBad(c.location)) continue;
+      const ctx = `${c.title}\n${c.location}\n${c.text}`;
+      const remoteSignal = c.remote || isRemoteContext(ctx);
+      if (profile.requireRemote && !remoteSignal) continue;
+      if (!isLocationAllowed(profile, ctx, remoteSignal)) continue;
+      if (!remoteSignal && isLocationBad(ctx)) continue;
 
+      if (remoteSignal && !c.remote) c.remote = true;
       candidates.push(c);
-      if (candidates.length >= 15) break;
+      if (candidates.length >= 20) break;
     }
-    if (candidates.length >= 15) break;
+    if (candidates.length >= 20) break;
   }
 
-  console.log(`[JOB-CRAWLER] Arbeitnow: ${candidates.length} Kandidaten (${profile.id})`);
+  console.log(`[JOB-CRAWLER] Indeed: ${candidates.length} Kandidaten (${profile.id})`);
   return candidates;
 }
 
@@ -449,10 +526,11 @@ async function fetchFromSearXNG(profile, webSearch) {
     // durch generische <title>-Tags wie "Stellenanzeige | StepStone"). LLM filtert den Rest.
     if (profile.titleExclude?.test(rawTitle)) return null;
 
-    const remote = isRemote(`${rawTitle} ${parsed.text}`);
+    const webCtx = `${rawTitle} ${parsed.text}`;
+    const remote = isRemote(webCtx);
     if (profile.requireRemote && !remote) return null;
-    if (!isLocationAllowed(profile, `${rawTitle} ${parsed.text}`, remote)) return null;
-    if (!remote && isLocationBad(parsed.text)) return null;
+    if (!isLocationAllowed(profile, webCtx, remote)) return null;
+    if (!remote && isLocationBad(webCtx)) return null;
 
     return {
       source:      "web",
@@ -609,7 +687,7 @@ async function llmFilter(candidates, profile, makeLLMClient) {
 // ─── runSearch (Orchestrierung) ───────────────────────────────────────────────
 async function runSearch(profile, webSearch, makeLLMClient, seenUrls) {
   const [baCandidates, webCandidates] = await Promise.all([
-    fetchFromBA(profile),
+    fetchFromIndeed(profile),
     fetchFromSearXNG(profile, webSearch),
   ]);
 
@@ -623,10 +701,15 @@ async function runSearch(profile, webSearch, makeLLMClient, seenUrls) {
   }
   console.log(`[JOB-CRAWLER] Gesamt nach Merge: ${fresh.length} Kandidaten (${profile.id})`);
 
-  if (fresh.length === 0) return "Keine passenden Stellen gefunden.";
+  const gated = fresh.filter((c) => locationPassesCandidate(profile, c));
+  if (gated.length !== fresh.length) {
+    console.log(`[JOB-CRAWLER] Orts-/Remote-Heuristik (happy-hermann): ${fresh.length} → ${gated.length} (${profile.id})`);
+  }
+
+  if (gated.length === 0) return "Keine passenden Stellen gefunden.";
 
   // LLM-Filter wenn verfügbar
-  const filtered = makeLLMClient ? await llmFilter(fresh, profile, makeLLMClient) : fresh.slice(0, MAX_RESULTS_PER_PROFILE);
+  const filtered = makeLLMClient ? await llmFilter(gated, profile, makeLLMClient) : gated.slice(0, MAX_RESULTS_PER_PROFILE);
 
   // Gefilterte (akzeptierte) URLs als "gesehen" markieren
   if (seenUrls) {
@@ -704,7 +787,7 @@ export async function crawlJobs(webSearch, makeLLMClient) {
 
 export async function startJobCrawler(webSearch, makeLLMClient) {
   await loadPersistedResults();
-  console.log("[JOB-CRAWLER] Gestartet (BA + SearXNG Hybrid) — alle 6h.");
+  console.log("[JOB-CRAWLER] Gestartet (Indeed RSS + SearXNG Hybrid) — alle 6h.");
   crawlJobs(webSearch, makeLLMClient);
   setInterval(() => crawlJobs(webSearch, makeLLMClient), INTERVAL_MS);
 }
