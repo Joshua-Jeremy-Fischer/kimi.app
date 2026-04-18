@@ -5,48 +5,23 @@ const RESULTS_FILE = "/data/jobs.json";
 const INTERVAL_MS  = 6 * 60 * 60 * 1000; // 6 Stunden
 
 // ─── Bundesagentur für Arbeit (BA) ────────────────────────────────────────────
+// Nutzt die öffentliche BA-Jobboerse API — kein API-Key nötig, Standard User-Agent
 const BA_API_BASE   = "https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v4/jobs";
 const BA_API_DETAIL = "https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v4/jobdetails";
-const BA_OAUTH_URL  = "https://rest.arbeitsagentur.de/oauth/gettoken_cc";
-// Öffentliche Client-Credentials der BA-Jobsuche (dokumentiert, kein Geheimnis)
-const BA_CLIENT_ID     = "jobboerse-jobsuche-ui";
-const BA_CLIENT_SECRET = "dd4f4f2e-2d04-4c91-9716-56a7bb4e0e78";
+const BA_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
-let baToken = null;
-let baTokenExpiry = 0;
-
-async function getBAToken() {
-  if (baToken && Date.now() < baTokenExpiry - 30_000) return baToken;
-  const res = await fetch(BA_OAUTH_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      client_id:     BA_CLIENT_ID,
-      client_secret: BA_CLIENT_SECRET,
-      grant_type:    "client_credentials",
-    }),
-    signal: AbortSignal.timeout(10_000),
-  });
-  if (!res.ok) throw new Error(`BA OAuth ${res.status}`);
-  const data = await res.json();
-  baToken = data.access_token;
-  baTokenExpiry = Date.now() + (data.expires_in || 3600) * 1000;
-  return baToken;
-}
-
-async function baHeaders() {
-  const token = await getBAToken();
-  return {
-    "Authorization": `Bearer ${token}`,
-    "User-Agent": "Mozilla/5.0 EsoBot-JobCrawler/2.0",
-    "Accept": "application/json",
-  };
-}
+const BA_HEADERS = {
+  "User-Agent": BA_UA,
+  "Accept": "application/json, text/plain, */*",
+  "Accept-Language": "de-DE,de;q=0.9",
+  "Origin": "https://www.arbeitsagentur.de",
+  "Referer": "https://www.arbeitsagentur.de/",
+};
 
 async function fetchBAJobs({ keyword, location, radius = 50, size = 25 }) {
   const params = new URLSearchParams({ was: keyword, angebotsart: "1", page: "0", size: String(Math.min(size, 25)) });
   if (location) { params.set("wo", location); params.set("umkreis", String(radius)); }
-  const res = await fetch(`${BA_API_BASE}?${params}`, { headers: await baHeaders(), signal: AbortSignal.timeout(15_000) });
+  const res = await fetch(`${BA_API_BASE}?${params}`, { headers: BA_HEADERS, signal: AbortSignal.timeout(15_000) });
   if (!res.ok) throw new Error(`BA-API ${res.status}`);
   return (await res.json()).stellenangebote || [];
 }
@@ -54,7 +29,7 @@ async function fetchBAJobs({ keyword, location, radius = 50, size = 25 }) {
 async function fetchBADetail(refnr) {
   try {
     const res = await fetch(`${BA_API_DETAIL}/${encodeURIComponent(refnr)}`, {
-      headers: await baHeaders(), signal: AbortSignal.timeout(10_000),
+      headers: BA_HEADERS, signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) return null;
     const d = await res.json();
@@ -201,10 +176,10 @@ const PROFILES = [
       ["IT Security",            "Erding",   80],
     ],
     searxQueries: [
-      "site:stepstone.de Junior SOC Analyst München 2026",
-      "site:stepstone.de IT Security Analyst München Quereinsteiger",
-      "site:indeed.com Junior IT Security Analyst Deutschland Remote",
-      "site:xing.com/jobs IAM Engineer Junior München",
+      "Junior SOC Analyst Stelle München 2026",
+      "IT Security Analyst Junior Stelle München Quereinsteiger",
+      "Junior IAM Engineer Stelle Remote Deutschland",
+      "ISMS Koordinator Junior Stelle Deutschland",
     ],
     titleInclude:  /soc|security|sicherheit|iam|isms|cyber|siem|soar|pentest|compliance|analyst/i,
     titleExclude:  /senior|lead|head|architect|principal|manager|direktor|ciso/i,
@@ -223,9 +198,9 @@ const PROFILES = [
       ["Sales Coordinator",          "München", 50],
     ],
     searxQueries: [
-      "site:stepstone.de Sachbearbeiter Innendienst Erding München 2026",
-      "site:stepstone.de Kaufmännischer Mitarbeiter Einkauf Erding",
-      "site:indeed.com Disponent ERP München Erding",
+      "Sachbearbeiter Innendienst Stelle Erding München 2026",
+      "Kaufmännischer Mitarbeiter Einkauf Stelle Erding Mühldorf",
+      "Disponent ERP Stelle München Großraum",
     ],
     titleInclude:  /sachbearbeiter|kaufmänn|innendienst|disponent|einkauf|vertrieb|koordinator|account|warenwirtschaft|erp/i,
     titleExclude:  /senior|head|lead|direktor|außendienst/i,
@@ -243,10 +218,10 @@ const PROFILES = [
       ["IT Consultant Junior",     null, 0],
     ],
     searxQueries: [
-      "site:stepstone.de IT Support Specialist Remote Deutschland 2026",
-      "site:indeed.com IT Helpdesk Remote Home Office Deutschland",
-      "site:xing.com/jobs Junior IT Consultant Remote Deutschland",
-      "site:join.com IT Support Remote Deutschland",
+      "IT Support Specialist Remote Stelle Deutschland 2026",
+      "IT Helpdesk Homeoffice Stelle Deutschland Junior",
+      "Junior IT Consultant Remote Stelle Deutschland",
+      "SaaS Onboarding Specialist Remote Stelle Deutschland",
     ],
     titleInclude:  /support|helpdesk|consultant|onboarding|service.desk|technical|it.specialist/i,
     titleExclude:  /senior|lead|head/i,
