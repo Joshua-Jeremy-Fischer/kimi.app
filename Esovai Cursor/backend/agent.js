@@ -220,39 +220,58 @@ async function webSearch(query, forceProvider) {
   }
 
   async function trySearXNG() {
-    const url = new URL("http://kimi-searxng:8080/search");
-    url.searchParams.set("q", query);
-    url.searchParams.set("format", "json");
-    // SearXNG akzeptiert z. B. "de" — "de-DE"/"de_DE" lösen ValidationException in preferences aus
-    url.searchParams.set("language", "de");
-    url.searchParams.set("categories", "general");
-    // Engines: ohne Env nutzt die Instanz ihre settings.yml-Defaults (häufig zuverlässiger als erzwungenes bing,google)
-    // Optional: SEARXNG_ENGINES=bing,google oder duckduckgo — nur setzen, wenn in SearXNG wirklich aktiviert
-    const engines = (process.env.SEARXNG_ENGINES || "").trim();
-    if (engines) url.searchParams.set("engines", engines);
     const tr = (process.env.SEARXNG_TIME_RANGE || "month").trim();
-    if (tr && tr !== "none") url.searchParams.set("time_range", tr);
-    const r = await fetch(url.toString(), { signal: AbortSignal.timeout(15_000) });
-    if (!r.ok) {
-      console.warn(`[SearXNG] HTTP ${r.status}: ${await r.text().catch(() => "")}`.slice(0, 300));
-      return null;
+
+    async function searxFetch(enginesLabel, enginesValue) {
+      const url = new URL("http://kimi-searxng:8080/search");
+      url.searchParams.set("q", query);
+      url.searchParams.set("format", "json");
+      url.searchParams.set("language", "de");
+      url.searchParams.set("categories", "general");
+      if (tr && tr !== "none") url.searchParams.set("time_range", tr);
+      if (enginesValue) url.searchParams.set("engines", enginesValue);
+      const r = await fetch(url.toString(), { signal: AbortSignal.timeout(15_000) });
+      if (!r.ok) {
+        const body = await r.text().catch(() => "");
+        console.warn(`[SearXNG] HTTP ${r.status} (${enginesLabel}): ${body}`.slice(0, 280));
+        return null;
+      }
+      return r.json();
     }
-    const d = await r.json();
-    if (!d.results?.length) {
-      const hint = d.unresponsive_engines?.length
-        ? ` unresponsive: ${JSON.stringify(d.unresponsive_engines)}`
-        : "";
-      console.warn(`[SearXNG] 0 Treffer für Query (Instanz-Engines prüfen).${hint}`);
-      return null;
+
+    const envEng = (process.env.SEARXNG_ENGINES || "").trim();
+    // Ohne Env: zuerst google+bing — vermeidet Instanz-Default mit duckduckgo (häufig CAPTCHA).
+    const attempts = envEng
+      ? [{ label: envEng, engines: envEng }]
+      : [
+          { label: "google,bing", engines: "google,bing" },
+          { label: "bing,google", engines: "bing,google" },
+          { label: "startpage", engines: "startpage" },
+          { label: "Instanz-Default", engines: null },
+        ];
+
+    for (const { label, engines } of attempts) {
+      try {
+        const d = await searxFetch(label, engines);
+        if (!d) continue;
+        if (d.results?.length) {
+          return {
+            source: "searxng",
+            results: d.results.slice(0, 5).map(x => ({ title: x.title, url: x.url, snippet: x.content?.slice(0, 400) })),
+          };
+        }
+        const hint = d.unresponsive_engines?.length
+          ? ` unresponsive: ${JSON.stringify(d.unresponsive_engines)}`
+          : "";
+        console.warn(`[SearXNG] 0 Treffer (${label}).${hint}`);
+      } catch (e) {
+        console.warn(`[SearXNG] ${label}: ${e.message}`);
+      }
     }
-    return {
-      source: "searxng",
-      results: d.results.slice(0, 5).map(x => ({ title: x.title, url: x.url, snippet: x.content?.slice(0, 400) })),
-    };
+    return null;
   }
 
-  // Hinweis: "duckduckgo" bleibt als ID aus Kompatibilitätsgründen bestehen,
-  // läuft technisch aber über SearXNG (Engines: bing,google), um CAPTCHA-Probleme zu vermeiden.
+  // Hinweis: Provider-ID "duckduckgo" bleibt aus Kompatibilitätsgründen — nutzt dieselbe SearXNG-Pipeline.
   const providers = { tavily: tryTavily, serper: trySerper, brave: tryBrave, searxng: trySearXNG, duckduckgo: trySearXNG };
 
   // Expliziter Provider gewählt

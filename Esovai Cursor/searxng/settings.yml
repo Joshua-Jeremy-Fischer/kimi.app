@@ -1,8 +1,8 @@
 use_default_settings:
   engines:
+    # duckduckgo: häufig CAPTCHA bei Server-IP → nur Google/Bing
     keep_only:
       - google
-      - duckduckgo
       - bing
 
 general:
