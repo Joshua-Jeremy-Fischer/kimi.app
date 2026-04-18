@@ -191,9 +191,18 @@ function isLocationBad(text) {
   return /\b(berlin|hamburg|frankfurt|köln|cologne|stuttgart|düsseldorf|nürnberg|nuremberg|leipzig|dresden|hannover|bremen|essen|dortmund|landshut|freising)\b/i.test(text);
 }
 
-// Arbeitnow: 72h Fenster (IT Security hat wenige Tagespostings in München)
-const MS_72H = 72 * 60 * 60 * 1000;
+// Arbeitnow: 7-Tage-Fenster (dünne Portale; seenUrls-Dedup verhindert Dopplungen)
+const MS_7DAYS = 7 * 24 * 60 * 60 * 1000;
 
+function isWithin7Days(dateStr) {
+  if (!dateStr) return false;
+  const ms = new Date(dateStr).getTime();
+  if (isNaN(ms)) return false;
+  return Date.now() - ms <= MS_7DAYS;
+}
+
+// Rückwärtskompatibel: SearXNG-Seiten trotzdem auf 72h begrenzen
+const MS_72H = 72 * 60 * 60 * 1000;
 function isWithin72h(dateStr) {
   if (!dateStr) return false;
   const ms = new Date(dateStr).getTime();
@@ -350,7 +359,7 @@ async function fetchFromBA(profile) {
 
       const c = arbeitnowToCandidate(job);
       if (!titleMatchesProfile(profile, c.title)) continue;
-      if (!isWithin72h(c.publishedAt)) continue;
+      if (!isWithin7Days(c.publishedAt)) continue;
       if (profile.requireRemote && !c.remote) continue;
       if (!c.remote && isLocationBad(c.location)) continue;
 
@@ -585,33 +594,47 @@ async function llmFilter(candidates, profile, makeLLMClient) {
 }
 
 // ─── runSearch (Orchestrierung) ───────────────────────────────────────────────
-async function runSearch(profile, webSearch, makeLLMClient) {
+async function runSearch(profile, webSearch, makeLLMClient, seenUrls) {
   const [baCandidates, webCandidates] = await Promise.all([
     fetchFromBA(profile),
     fetchFromSearXNG(profile, webSearch),
   ]);
 
   const merged = mergeCandidates(baCandidates, webCandidates);
-  const all = merged.filter((c) => titleMatchesProfile(profile, c.title));
-  if (merged.length !== all.length) {
-    console.log(`[JOB-CRAWLER] Titel-Nachfilter: ${merged.length} → ${all.length} (${profile.id})`);
+  // Bereits gezeigte Jobs überspringen (seenUrls-Dedup)
+  const fresh = seenUrls
+    ? merged.filter((c) => !seenUrls.has(canonicalUrl(c.url)))
+    : merged;
+  if (merged.length !== fresh.length) {
+    console.log(`[JOB-CRAWLER] seenUrls-Dedup: ${merged.length} → ${fresh.length} (${profile.id})`);
   }
-  console.log(`[JOB-CRAWLER] Gesamt nach Merge: ${all.length} Kandidaten (${profile.id})`);
+  console.log(`[JOB-CRAWLER] Gesamt nach Merge: ${fresh.length} Kandidaten (${profile.id})`);
 
-  if (all.length === 0) return "Keine passenden Stellen gefunden.";
+  if (fresh.length === 0) return "Keine passenden Stellen gefunden.";
 
   // LLM-Filter wenn verfügbar
-  const filtered = makeLLMClient ? await llmFilter(all, profile, makeLLMClient) : all.slice(0, 12);
+  const filtered = makeLLMClient ? await llmFilter(fresh, profile, makeLLMClient) : fresh.slice(0, 12);
+
+  // Gefilterte (akzeptierte) URLs als "gesehen" markieren
+  if (seenUrls) {
+    for (const c of filtered) seenUrls.add(canonicalUrl(c.url));
+    // Auch verworfene Kandidaten als gesehen markieren → nicht nochmal prüfen
+    for (const c of fresh)    seenUrls.add(canonicalUrl(c.url));
+  }
+
   if (filtered.length === 0) return "Keine passenden Stellen gefunden.";
 
   return filtered.map(formatCandidate).join("\n");
 }
 
 // ─── Store ────────────────────────────────────────────────────────────────────
-let jobStore = { lastRun: null, results: {}, running: false };
+let jobStore = { lastRun: null, results: {}, running: false, seenUrls: [] };
 
 async function loadPersistedResults() {
-  try { jobStore = JSON.parse(await fs.readFile(RESULTS_FILE, "utf8")); } catch {}
+  try {
+    const loaded = JSON.parse(await fs.readFile(RESULTS_FILE, "utf8"));
+    jobStore = { seenUrls: [], ...loaded };
+  } catch {}
 }
 
 async function saveResults() {
@@ -627,18 +650,23 @@ export async function crawlJobs(webSearch, makeLLMClient) {
   jobStore.running = true;
   jobStore.lastRun = new Date().toISOString();
 
+  // seenUrls als Set für O(1)-Lookup; maximal 2000 Einträge behalten
+  const seenSet = new Set(Array.isArray(jobStore.seenUrls) ? jobStore.seenUrls : []);
+
   for (const profile of PROFILES) {
     jobStore.results[profile.id] = { label: profile.label, updatedAt: new Date().toISOString(), status: "running", content: "" };
   }
 
   for (const profile of PROFILES) {
     console.log(`[JOB-CRAWLER] ── ${profile.label} ──`);
-    const content = await runSearch(profile, webSearch, makeLLMClient);
+    const content = await runSearch(profile, webSearch, makeLLMClient, seenSet);
     jobStore.results[profile.id] = {
       label: profile.label, updatedAt: new Date().toISOString(), status: "done", content,
     };
   }
 
+  // seenUrls-Set zurück in Array (auf 2000 kappen)
+  jobStore.seenUrls = [...seenSet].slice(-2000);
   jobStore.running = false;
   await saveResults();
   console.log(`[JOB-CRAWLER] Abgeschlossen: ${jobStore.lastRun}`);
