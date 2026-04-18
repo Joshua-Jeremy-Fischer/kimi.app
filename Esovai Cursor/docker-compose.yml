@@ -121,6 +121,30 @@ services:
     networks:
       - app-net
 
+  openclaw-gateway:
+    image: ghcr.io/openclaw/openclaw:latest
+    container_name: openclaw-gateway
+    restart: unless-stopped
+    environment:
+      # OpenClaw → lokales Ollama
+      OLLAMA_BASE_URL: "http://ollama:11434"
+      OLLAMA_API_KEY: ""
+      # Security-Header deaktivieren damit nginx-Proxy iframing erlauben kann
+      DISABLE_FRAME_OPTIONS: "true"
+      DISABLE_CSP: "true"
+    ports:
+      - "127.0.0.1:18789:3000"
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=10m,mode=1777
+    networks:
+      - app-net
+    depends_on:
+      - ollama
+
   langchain-agent:
     build: ./langchain-agent
     container_name: langchain-agent
