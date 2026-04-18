@@ -119,6 +119,8 @@ services:
     image: ghcr.io/openclaw/openclaw:latest
     container_name: openclaw-gateway
     restart: unless-stopped
+    environment:
+      OLLAMA_API_KEY: ${OLLAMA_API_KEY}
     volumes:
       - openclaw_config:/home/node/.openclaw
     networks:
