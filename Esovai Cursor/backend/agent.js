@@ -225,14 +225,26 @@ async function webSearch(query, forceProvider) {
     url.searchParams.set("format", "json");
     // SearXNG akzeptiert z. B. "de" — "de-DE"/"de_DE" lösen ValidationException in preferences aus
     url.searchParams.set("language", "de");
-    // DuckDuckGo triggert serverseitig häufig CAPTCHA → lieber Bing/Google nutzen
-    url.searchParams.set("engines", "bing,google");
     url.searchParams.set("categories", "general");
-    url.searchParams.set("time_range", "month"); // Nur Ergebnisse der letzten ~30 Tage
+    // Engines: ohne Env nutzt die Instanz ihre settings.yml-Defaults (häufig zuverlässiger als erzwungenes bing,google)
+    // Optional: SEARXNG_ENGINES=bing,google oder duckduckgo — nur setzen, wenn in SearXNG wirklich aktiviert
+    const engines = (process.env.SEARXNG_ENGINES || "").trim();
+    if (engines) url.searchParams.set("engines", engines);
+    const tr = (process.env.SEARXNG_TIME_RANGE || "month").trim();
+    if (tr && tr !== "none") url.searchParams.set("time_range", tr);
     const r = await fetch(url.toString(), { signal: AbortSignal.timeout(15_000) });
-    if (!r.ok) return null;
+    if (!r.ok) {
+      console.warn(`[SearXNG] HTTP ${r.status}: ${await r.text().catch(() => "")}`.slice(0, 300));
+      return null;
+    }
     const d = await r.json();
-    if (!d.results?.length) return null;
+    if (!d.results?.length) {
+      const hint = d.unresponsive_engines?.length
+        ? ` unresponsive: ${JSON.stringify(d.unresponsive_engines)}`
+        : "";
+      console.warn(`[SearXNG] 0 Treffer für Query (Instanz-Engines prüfen).${hint}`);
+      return null;
+    }
     return {
       source: "searxng",
       results: d.results.slice(0, 5).map(x => ({ title: x.title, url: x.url, snippet: x.content?.slice(0, 400) })),

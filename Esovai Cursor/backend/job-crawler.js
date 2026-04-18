@@ -341,6 +341,7 @@ async function fetchFromSearXNG(profile, webSearch) {
   for (const query of profile.searxQueries) {
     try {
       const result = await webSearch(query, "searxng");
+      if (result?.error) console.warn(`[JOB-CRAWLER] SearXNG: ${result.error} (${query.slice(0, 60)}…)`);
       for (const r of result.results || []) {
         if (r.url) urlsFound.add(canonicalUrl(r.url));
       }
@@ -356,6 +357,7 @@ async function fetchFromSearXNG(profile, webSearch) {
     for (const query of profile.searxQueries) {
       try {
         const result = await webSearch(simplifyQuery(query), "auto");
+        if (result?.error) console.warn(`[JOB-CRAWLER] auto: ${result.error}`);
         for (const r of result.results || []) {
           if (r.url) urlsFound.add(canonicalUrl(r.url));
         }
