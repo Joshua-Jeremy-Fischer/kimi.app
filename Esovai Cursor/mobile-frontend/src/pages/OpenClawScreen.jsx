@@ -24,8 +24,8 @@ export default function OpenClawScreen() {
             <Zap className="w-4 h-4 text-primary" />
           </div>
           <div>
-            <span className="text-[14px] font-semibold">OpenClaw</span>
-            <span className="ml-2 text-[10px] text-muted-foreground">shrimp.esovai.tech</span>
+            <span className="text-[14px] font-semibold">Ollama Chat</span>
+            <span className="ml-2 text-[10px] text-muted-foreground">Open WebUI</span>
           </div>
         </div>
         <div className="flex items-center gap-1">
@@ -37,7 +37,7 @@ export default function OpenClawScreen() {
             <RefreshCw className={`w-4 h-4 text-muted-foreground ${loading ? "animate-spin" : ""}`} />
           </button>
           <a
-            href="https://shrimp.esovai.tech"
+            href="https://remote.esovai.tech/openclaw/"
             target="_blank"
             rel="noopener noreferrer"
             className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-full active:bg-accent"
@@ -55,7 +55,7 @@ export default function OpenClawScreen() {
             <div className="w-10 h-10 rounded-2xl bg-primary/10 flex items-center justify-center">
               <Zap className="w-5 h-5 text-primary animate-pulse" />
             </div>
-            <p className="text-sm text-muted-foreground">OpenClaw lädt...</p>
+            <p className="text-sm text-muted-foreground">Open WebUI lädt...</p>
           </div>
         )}
 
@@ -65,7 +65,7 @@ export default function OpenClawScreen() {
               <Zap className="w-6 h-6 text-destructive" />
             </div>
             <div className="text-center">
-              <p className="text-sm font-medium">OpenClaw nicht erreichbar</p>
+              <p className="text-sm font-medium">Open WebUI nicht erreichbar</p>
               <p className="text-xs text-muted-foreground mt-1">Prüfe ob der Service läuft.</p>
             </div>
             <div className="flex gap-2">
@@ -76,7 +76,7 @@ export default function OpenClawScreen() {
                 Erneut versuchen
               </button>
               <a
-                href="https://shrimp.esovai.tech"
+                href="https://remote.esovai.tech/openclaw/"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="px-4 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-medium flex items-center gap-1.5 active:opacity-70"
@@ -96,7 +96,7 @@ export default function OpenClawScreen() {
           allow="clipboard-read; clipboard-write; microphone"
           onLoad={() => setLoading(false)}
           onError={() => { setLoading(false); setError(true); }}
-          title="OpenClaw"
+          title="Open WebUI"
         />
       </div>
     </div>
