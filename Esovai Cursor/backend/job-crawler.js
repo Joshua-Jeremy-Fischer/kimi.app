@@ -439,24 +439,39 @@ function buildRetryPrompt(candidate, profile) {
 
 // ─── Einzelklassifikation: Primary → Retry → Regex-Gate ───────────────────────
 
-async function classifyCandidate(client, model, candidate, profile) {
-  // Stufe 1: Primärer Prompt (max_tokens groß genug für Thinking + Antwort)
+/** Erzwingt Text-Antwort (kein tool_calls); bei Ollama-400 ohne tool_choice wiederholen */
+async function chatClassify(client, body) {
   try {
-    const r1 = await client.chat.completions.create({
-      model, temperature: 0.0, max_tokens: 512,
+    return await client.chat.completions.create({ ...body, tool_choice: "none" });
+  } catch (e) {
+    if (String(e?.message || "").includes("400") || String(e?.status || "") === "400") {
+      return await client.chat.completions.create(body);
+    }
+    throw e;
+  }
+}
+
+async function classifyCandidate(client, model, candidate, profile) {
+  // Stufe 1: Primärer Prompt
+  try {
+    const r1 = await chatClassify(client, {
+      model,
+      temperature: 0.0,
+      max_tokens: 512,
       messages: [{ role: "user", content: buildPrimaryPrompt(candidate, profile) }],
     });
     const d1 = parseBinaryDecision(r1?.choices?.[0]?.message?.content);
     if (d1 !== null) return { decision: d1, source: "primary" };
-    // Tool-Call-Antwort ohne Content → direkt zu Stufe 2
   } catch (e) {
     console.warn(`[JOB-CRAWLER] LLM Stufe-1 Fehler (${candidate.title}): ${e.message}`);
   }
 
   // Stufe 2: Emergency Retry — ultra-kurzer Prompt
   try {
-    const r2 = await client.chat.completions.create({
-      model, temperature: 0.0, max_tokens: 128,
+    const r2 = await chatClassify(client, {
+      model,
+      temperature: 0.0,
+      max_tokens: 128,
       messages: [{ role: "user", content: buildRetryPrompt(candidate, profile) }],
     });
     const d2 = parseBinaryDecision(r2?.choices?.[0]?.message?.content);
@@ -465,7 +480,7 @@ async function classifyCandidate(client, model, candidate, profile) {
     console.warn(`[JOB-CRAWLER] LLM Stufe-2 Fehler (${candidate.title}): ${e.message}`);
   }
 
-  // Stufe 3: Regex-Gate (fail-closed — kein blindes Behalten mehr)
+  // Stufe 3: Regex-Gate (fail-closed)
   const rg = regexGate(candidate, profile);
   return { decision: rg, source: "regex_fallback" };
 }
