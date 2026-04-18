@@ -230,7 +230,15 @@ async function webSearch(query, forceProvider) {
       url.searchParams.set("categories", "general");
       if (tr && tr !== "none") url.searchParams.set("time_range", tr);
       if (enginesValue) url.searchParams.set("engines", enginesValue);
-      const r = await fetch(url.toString(), { signal: AbortSignal.timeout(15_000) });
+      // SearXNG ≥2024: Botdetection erwartet Client-IP-Header bei internen Requests (sonst ERROR im searxng-Log, oft 0 Treffer)
+      const r = await fetch(url.toString(), {
+        signal: AbortSignal.timeout(15_000),
+        headers: {
+          "User-Agent": "Mozilla/5.0 (compatible; KimiBackend/2.0; internal→searxng)",
+          "X-Forwarded-For": process.env.SEARXNG_FORWARDED_FOR || "127.0.0.1",
+          "X-Real-IP": process.env.SEARXNG_REAL_IP || "127.0.0.1",
+        },
+      });
       if (!r.ok) {
         const body = await r.text().catch(() => "");
         console.warn(`[SearXNG] HTTP ${r.status} (${enginesLabel}): ${body}`.slice(0, 280));
@@ -279,7 +287,11 @@ async function webSearch(query, forceProvider) {
     try {
       const result = await providers[provider]();
       if (result) return result;
-      return { error: `Provider "${provider}" hat keine Ergebnisse geliefert (Key vorhanden?)` };
+      const noKeyHint =
+        provider === "searxng" || provider === "duckduckgo"
+          ? `Provider "${provider}" lieferte keine Treffer (SearXNG-Engines / Netzwerk / Botdetection — nicht API-Key).`
+          : `Provider "${provider}" hat keine Ergebnisse geliefert (API-Key gesetzt?)`;
+      return { error: noKeyHint };
     } catch (e) {
       return { error: `Provider "${provider}" Fehler: ${e.message}` };
     }
