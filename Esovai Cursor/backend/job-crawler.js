@@ -3,7 +3,7 @@ import path from "path";
 
 const RESULTS_FILE = "/data/jobs.json";
 const INTERVAL_MS  = 6 * 60 * 60 * 1000; // 6 Stunden
-const MAX_RESULTS_PER_PROFILE = 6;
+const MAX_RESULTS_PER_PROFILE = 5;
 
 // ─── Arbeitnow API (kostenlos, kein Auth, deutsche Jobs) ─────────────────────
 // Docs: https://arbeitnow.com/api
@@ -316,9 +316,9 @@ const PROFILES = [
       "Kaufmaennischer Mitarbeiter Einkauf Erding Muehldorf",
       "Disponent ERP Stelle Muenchen",
     ],
-    titleInclude:  /sachbearbeiter|kaufmänn|innendienst|disponent|einkauf|vertriebsmitarbeiter|vertriebskoordinator|auftragsbearbeitung|warenwirtschaft/i,
+    titleInclude:  /sachbearbeiter|kaufmänn|kaufmaenn|innendienst|disponent|einkauf|auftragsbearbeitung|warenwirtschaft|backoffice/i,
     // SAP / reine Vertriebs-/Key-Account-Rollen / techn. Vertrieb oft Fehl-Treffer bei Arbeitnow
-    titleExclude:  /senior|head|lead|direktor|außendienst|executive|ingenieur|techniker|entwickler|architect|consultant|\bsap\b|s\/4|s4hana|basis[\s-]?consultant|strategic\s+account|key[\s-]?account|account[\s-]?executive|vertriebsingenieur/i,
+    titleExclude:  /senior|head|lead|direktor|außendienst|aussendienst|executive|ingenieur|techniker|entwickler|architect|consultant|\bsap\b|s\/4|s4hana|basis[\s-]?consultant|strategic\s+account|key[\s-]?account|account[\s-]?executive|vertriebsingenieur|vertriebsmitarbeiter|sales|account\s+manager|verkehrsüberwachung|verkehrsueberwachung|ordnungsamt|kommunal/i,
     locationAllow: /muenchen|munich|erding|dorfen|markt\s?schwaben|poing|trudering|riem|feldkirchen|vaterstetten|baldham|zorneding|ebersberg|muehldorf|mühldorf|rosenheim/i,
     requireRemote: false,
     systemPrompt:  "Kandidat: Kaufmann im Groß- und Außenhandel, ERP (WW90/AS400), Stammdatenpflege. Ziel: Sachbearbeiter Einkauf/Vertrieb/Innendienst, Disponent. Ausschluss: reiner Außendienst >20%, reines Lager, Callcenter.",
@@ -427,7 +427,7 @@ async function fetchFromSearXNG(profile, webSearch) {
     }
   }
 
-  const urls = [...urlsFound].slice(0, 20); // max 20 URLs fetchen
+  const urls = [...urlsFound].slice(0, 12); // max 12 URLs fetchen
   console.log(`[JOB-CRAWLER] SearXNG: ${urls.length} URLs gefunden (${profile.id})`);
 
   // Concurrent fetch (max 4 parallel)
