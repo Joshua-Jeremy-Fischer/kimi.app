@@ -165,11 +165,11 @@ const PROFILES = [
     id: "it-security",
     label: "IT Security",
     baSearches: [
-      ["SOC Analyst",            "München",   50, false],
-      ["IT Security Analyst",    "München",   50, false],
-      ["Informationssicherheit", "München",   50, false],
-      ["IAM Engineer",           "Deutschland", 0, true],
-      ["SOC Analyst",            "Deutschland", 0, true],
+      ["SOC Analyst",         "München",     50, false],
+      ["Security Analyst",    "München",     50, false],
+      ["IT Security",         "München",     50, false],
+      ["IAM Engineer",        "Deutschland",  0, true],
+      ["Security Engineer",   "Deutschland",  0, true],
     ],
     searxQueries: [
       "Junior SOC Analyst Stelle München 2026",
@@ -408,9 +408,12 @@ async function llmFilter(candidates, profile, makeLLMClient) {
       continue;
     }
 
-    const isYes = /^(JA|YES|J\b|Y\b)/.test(answer);
-    console.log(`[JOB-CRAWLER] LLM: ${isYes ? "✓" : "✗"} ${c.title} → ${answer || "(leer)"}`);
-    if (isYes) results.push(c);
+    const isNo    = /^(NEIN|NO|N\b)/.test(answer);
+    const isEmpty = !answer;
+    // Leer/unbekannte Antwort → Stelle behalten (kein stiller Verlust)
+    const keep = !isNo;
+    console.log(`[JOB-CRAWLER] LLM: ${keep ? "✓" : "✗"} ${c.title} → ${answer || "(leer→behalten)"}`);
+    if (keep) results.push(c);
 
     if (results.length >= 12) break;
   }
