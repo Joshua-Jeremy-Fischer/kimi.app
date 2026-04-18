@@ -4,37 +4,37 @@ import path from "path";
 const RESULTS_FILE = "/data/jobs.json";
 const INTERVAL_MS  = 6 * 60 * 60 * 1000; // 6 Stunden
 
-// ─── Bundesagentur für Arbeit (BA) ────────────────────────────────────────────
-// Nutzt die öffentliche BA-Jobboerse API — kein API-Key nötig, Standard User-Agent
-const BA_API_BASE   = "https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v4/jobs";
-const BA_API_DETAIL = "https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v4/jobdetails";
-const BA_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+// ─── Arbeitnow API (kostenlos, kein Auth, deutsche Jobs) ─────────────────────
+// Docs: https://arbeitnow.com/api
+const ARBEITNOW_BASE = "https://arbeitnow.com/api/job-board-api";
 
-const BA_HEADERS = {
-  "User-Agent": BA_UA,
-  "Accept": "application/json, text/plain, */*",
-  "Accept-Language": "de-DE,de;q=0.9",
-  "Origin": "https://www.arbeitsagentur.de",
-  "Referer": "https://www.arbeitsagentur.de/",
-};
+async function fetchArbeitnowJobs({ keyword, location, remote = false, page = 1 }) {
+  const params = new URLSearchParams({ page: String(page) });
+  if (keyword)  params.set("search", keyword);
+  if (location) params.set("location", location);
+  if (remote)   params.set("remote", "true");
 
-async function fetchBAJobs({ keyword, location, radius = 50, size = 25 }) {
-  const params = new URLSearchParams({ was: keyword, angebotsart: "1", page: "0", size: String(Math.min(size, 25)) });
-  if (location) { params.set("wo", location); params.set("umkreis", String(radius)); }
-  const res = await fetch(`${BA_API_BASE}?${params}`, { headers: BA_HEADERS, signal: AbortSignal.timeout(15_000) });
-  if (!res.ok) throw new Error(`BA-API ${res.status}`);
-  return (await res.json()).stellenangebote || [];
+  const res = await fetch(`${ARBEITNOW_BASE}?${params}`, {
+    headers: { "Accept": "application/json", "User-Agent": "EsoBot-JobCrawler/2.0" },
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!res.ok) throw new Error(`Arbeitnow ${res.status}`);
+  const data = await res.json();
+  return data.data || [];
 }
 
-async function fetchBADetail(refnr) {
-  try {
-    const res = await fetch(`${BA_API_DETAIL}/${encodeURIComponent(refnr)}`, {
-      headers: BA_HEADERS, signal: AbortSignal.timeout(10_000),
-    });
-    if (!res.ok) return null;
-    const d = await res.json();
-    return (d.stellenbeschreibung || d.beschreibung || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-  } catch { return null; }
+/** Arbeitnow-Job → einheitliches Kandidaten-Objekt */
+function arbeitnowToCandidate(job) {
+  return {
+    source:      "arbeitnow",
+    url:         job.url || `https://arbeitnow.com/jobs/${job.slug}`,
+    title:       job.title || "",
+    company:     job.company_name || "",
+    location:    job.location || "",
+    publishedAt: job.created_at ? new Date(job.created_at * 1000).toISOString() : "",
+    remote:      !!job.remote,
+    text:        (job.description || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 2000),
+  };
 }
 
 // ─── Web-Fetch für SearXNG-Treffer ────────────────────────────────────────────
@@ -111,9 +111,6 @@ function extractJobText(html) {
 
 // ─── Hilfsfunktionen ──────────────────────────────────────────────────────────
 
-function jobUrlBA(refnr) {
-  return `https://www.arbeitsagentur.de/jobsuche/jobdetail/${encodeURIComponent(refnr)}`;
-}
 
 function canonicalUrl(url) {
   try {
@@ -168,12 +165,11 @@ const PROFILES = [
     id: "it-security",
     label: "IT Security",
     baSearches: [
-      ["SOC Analyst",            "München",  60],
-      ["IT Security Analyst",    "München",  60],
-      ["Informationssicherheit", "München",  60],
-      ["IAM Engineer",           "München",  60],
-      ["SOC Analyst",            null,        0],
-      ["IT Security",            "Erding",   80],
+      ["SOC Analyst",            "München",   50, false],
+      ["IT Security Analyst",    "München",   50, false],
+      ["Informationssicherheit", "München",   50, false],
+      ["IAM Engineer",           "Deutschland", 0, true],
+      ["SOC Analyst",            "Deutschland", 0, true],
     ],
     searxQueries: [
       "Junior SOC Analyst Stelle München 2026",
@@ -190,12 +186,10 @@ const PROFILES = [
     id: "kaufmaennisch",
     label: "Kaufmännisch",
     baSearches: [
-      ["Sachbearbeiter Einkauf",     "Erding",  50],
-      ["Sachbearbeiter Vertrieb",    "Erding",  50],
-      ["Kaufmännischer Mitarbeiter", "Erding",  50],
-      ["Disponent",                  "Erding",  50],
-      ["Sachbearbeiter Innendienst", "München", 40],
-      ["Sales Coordinator",          "München", 50],
+      ["Sachbearbeiter Einkauf",     "München", 50, false],
+      ["Sachbearbeiter Innendienst", "München", 50, false],
+      ["Kaufmännischer Mitarbeiter", "München", 50, false],
+      ["Disponent",                  "München", 50, false],
     ],
     searxQueries: [
       "Sachbearbeiter Innendienst Stelle Erding München 2026",
@@ -211,11 +205,10 @@ const PROFILES = [
     id: "it-support-remote",
     label: "IT Support Remote",
     baSearches: [
-      ["IT Support Specialist",    null, 0],
-      ["IT Helpdesk",              null, 0],
-      ["Technical Support Remote", null, 0],
-      ["SaaS Onboarding",          null, 0],
-      ["IT Consultant Junior",     null, 0],
+      ["IT Support",          "Deutschland", 0, true],
+      ["Technical Support",   "Deutschland", 0, true],
+      ["IT Helpdesk",         "Deutschland", 0, true],
+      ["SaaS Onboarding",     "Deutschland", 0, true],
     ],
     searxQueries: [
       "IT Support Specialist Remote Stelle Deutschland 2026",
@@ -230,54 +223,43 @@ const PROFILES = [
   },
 ];
 
-// ─── Quelle A: Bundesagentur ──────────────────────────────────────────────────
+// ─── Quelle A: Arbeitnow ──────────────────────────────────────────────────────
 async function fetchFromBA(profile) {
   const seen       = new Set();
   const candidates = [];
 
-  for (const [keyword, location, radius] of profile.baSearches) {
+  for (const [keyword, location, , remote] of profile.baSearches) {
     let jobs;
     try {
-      jobs = await fetchBAJobs({ keyword, location: location || undefined, radius, size: 25 });
+      jobs = await fetchArbeitnowJobs({
+        keyword,
+        location: location || undefined,
+        remote:   !!remote || profile.requireRemote,
+      });
     } catch (e) {
-      console.error(`[JOB-CRAWLER] BA Fehler (${keyword}): ${e.message}`);
+      console.error(`[JOB-CRAWLER] Arbeitnow Fehler (${keyword}): ${e.message}`);
       continue;
     }
 
     for (const job of jobs) {
-      if (!job.refnr || seen.has(job.refnr)) continue;
-      seen.add(job.refnr);
+      const id = job.slug || job.url;
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
 
-      const titel = job.titel || "";
-      if (profile.titleInclude && !profile.titleInclude.test(titel)) continue;
-      if (profile.titleExclude &&  profile.titleExclude.test(titel)) continue;
+      const c = arbeitnowToCandidate(job);
+      if (profile.titleInclude && !profile.titleInclude.test(c.title)) continue;
+      if (profile.titleExclude &&  profile.titleExclude.test(c.title)) continue;
+      if (!isWithin24h(c.publishedAt)) continue;
+      if (profile.requireRemote && !c.remote) continue;
+      if (!c.remote && isLocationBad(c.location)) continue;
 
-      // 24h-Filter (BA liefert verlässliche Datumsangaben)
-      const pubDate = job.aktuelleVeroeffentlichungsdatum || "";
-      if (!isWithin24h(pubDate)) continue;
-
-      const remote = isRemote(`${titel} ${job.arbeitsort?.ort || ""}`);
-      if (profile.requireRemote && !remote) continue;
-      if (!remote && isLocationBad(job.arbeitsort?.ort || "")) continue;
-
-      const text = await fetchBADetail(job.refnr);
-      candidates.push({
-        source:      "ba",
-        url:         jobUrlBA(job.refnr),
-        title:       titel,
-        company:     job.arbeitgeber || "",
-        location:    job.arbeitsort?.ort || "",
-        publishedAt: pubDate,
-        remote,
-        text:        text || titel,
-      });
-
+      candidates.push(c);
       if (candidates.length >= 15) break;
     }
     if (candidates.length >= 15) break;
   }
 
-  console.log(`[JOB-CRAWLER] BA: ${candidates.length} Kandidaten (${profile.id})`);
+  console.log(`[JOB-CRAWLER] Arbeitnow: ${candidates.length} Kandidaten (${profile.id})`);
   return candidates;
 }
 
