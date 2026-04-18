@@ -81,6 +81,23 @@ function indeedToCandidate(item) {
 
 // ─── Web-Fetch für SearXNG-Treffer ────────────────────────────────────────────
 const DOMAIN_BLACKLIST = /linkedin\.com\/authwall|signup|login|join|captcha|accounts\./i;
+
+// Aggregator-Übersichtsseiten → kein individuelles Stellenangebot
+const LISTING_PAGE = /kimeta\.de|jobvector\.de\/jobs\/[^?#]+\/?$|indeed\.com\/jobs\?|indeed\.com\/l-|stepstone\.de\/jobs\?|stepstone\.de\/jobsuche|xing\.com\/jobs\/search|monster\.de\/jobs\/suche|karriere\.at\/jobs\?|jobboerse\.arbeitsagentur\.de\/prod\/jobboerse\/(?!detail)|\/jobs\/?$|\/stellenangebote\/?$|\/stellenangebote\?|\/suche\?/i;
+
+/** Gibt true zurück wenn die URL wie ein individuelles Stellenangebot aussieht */
+function looksLikeJobPosting(url) {
+  if (LISTING_PAGE.test(url)) return false;
+  // Muss mindestens einen job-ID-artigen Teil haben (Zahl, Hash oder spez. Pfadsegment)
+  const u = (() => { try { return new URL(url); } catch { return null; } })();
+  if (!u) return false;
+  const path = u.pathname;
+  if (/\/(?:job|stelle|anzeige|position|viewjob|jobdetail|stellenanzeige|offer|stellendetail)s?\//i.test(path)) return true;
+  if (/[a-z0-9]{6,}[\-_][a-z0-9]{4,}/i.test(path)) return true; // ID-artiger Slug
+  if (/\d{5,}/.test(path)) return true; // numerische Job-ID
+  if (u.searchParams.has("jk") || u.searchParams.has("jobid") || u.searchParams.has("id")) return true;
+  return false;
+}
 const MAX_FETCH_BYTES  = 300_000; // 300 KB
 
 async function fetchJobPage(url) {
@@ -320,7 +337,8 @@ function formatCandidate(c) {
   const { title, company, location, remote, url, publishedAt } = c;
   const datum  = (publishedAt || "").split("T")[0];
   const remStr = remote ? "Remote/HO" : (location || "Vor Ort");
-  return `${title} | ${company || "–"} | ${location || "–"} | ${remStr} | ${url} | ${datum}`;
+  const link   = url ? `[🔗 Link](${url})` : "–";
+  return `**${title}** | ${company || "–"} | ${location || "–"} | ${remStr} | ${link} | ${datum}`;
 }
 
 // ─── Concurrent fetch helper ──────────────────────────────────────────────────
@@ -480,7 +498,7 @@ async function fetchFromSearXNG(profile, webSearch) {
       const result = await webSearch(query, "searxng");
       if (result?.error) console.warn(`[JOB-CRAWLER] SearXNG: ${result.error} (${query.slice(0, 60)}…)`);
       for (const r of result.results || []) {
-        if (r.url) urlsFound.add(canonicalUrl(r.url));
+        if (r.url && looksLikeJobPosting(r.url)) urlsFound.add(canonicalUrl(r.url));
       }
     } catch (e) {
       console.warn(`[JOB-CRAWLER] SearXNG Fehler (${query}): ${e.message}`);
@@ -488,7 +506,6 @@ async function fetchFromSearXNG(profile, webSearch) {
   }
 
   // Stufe 2: Fallback auf auto (Tavily→Serper→Brave) wenn SearXNG nichts lieferte
-  // site:-Operator wird entfernt da externe APIs ihn schlecht supporten
   if (urlsFound.size === 0) {
     console.log(`[JOB-CRAWLER] SearXNG 0 Treffer → Fallback auf auto (${profile.id})`);
     for (const query of profile.searxQueries) {
@@ -496,7 +513,7 @@ async function fetchFromSearXNG(profile, webSearch) {
         const result = await webSearch(simplifyQuery(query), "auto");
         if (result?.error) console.warn(`[JOB-CRAWLER] auto: ${result.error}`);
         for (const r of result.results || []) {
-          if (r.url) urlsFound.add(canonicalUrl(r.url));
+          if (r.url && looksLikeJobPosting(r.url)) urlsFound.add(canonicalUrl(r.url));
         }
       } catch (e) {
         console.warn(`[JOB-CRAWLER] auto Fallback Fehler (${query}): ${e.message}`);
