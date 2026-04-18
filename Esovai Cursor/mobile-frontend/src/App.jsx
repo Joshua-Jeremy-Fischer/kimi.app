@@ -10,6 +10,7 @@ import ChatView from './pages/ChatView';
 import AgentScreen from './pages/AgentScreen';
 import SettingsScreen from './pages/SettingsScreen';
 import InboxScreen from './pages/InboxScreen';
+import OpenClawScreen from './pages/OpenClawScreen';
 
 function App() {
   return (
@@ -21,6 +22,7 @@ function App() {
               <Route path="/" element={<ChatList />} />
               <Route path="/inbox" element={<InboxScreen />} />
               <Route path="/agent" element={<AgentScreen />} />
+              <Route path="/openclaw" element={<OpenClawScreen />} />
               <Route path="/settings" element={<SettingsScreen />} />
             </Route>
             <Route path="/chat/:chatId" element={<ChatView />} />

@@ -1,5 +1,5 @@
 import { Link, useLocation } from "react-router-dom";
-import { MessageSquare, Bot, Settings } from "lucide-react";
+import { MessageSquare, Bot, Settings, Zap } from "lucide-react";
 
 function EsoBotIcon({ className }) {
   return (
@@ -12,10 +12,11 @@ function EsoBotIcon({ className }) {
 }
 
 const navItems = [
-  { path: "/inbox", icon: null, label: "ESO Bot", isEso: true },
-  { path: "/", icon: MessageSquare, label: "Chat" },
-  { path: "/agent", icon: Bot, label: "Agent" },
-  { path: "/settings", icon: Settings, label: "Settings" },
+  { path: "/inbox",     icon: null,         label: "ESO Bot",  isEso: true },
+  { path: "/",          icon: MessageSquare, label: "Chat" },
+  { path: "/openclaw",  icon: Zap,           label: "OpenClaw" },
+  { path: "/agent",     icon: Bot,           label: "Agent" },
+  { path: "/settings",  icon: Settings,      label: "Settings" },
 ];
 
 export default function BottomNav() {

@@ -1,29 +1,14 @@
 import { Outlet, Link, useLocation } from "react-router-dom";
-import { MessageSquare, Bot, Settings } from "lucide-react";
+import { MessageSquare, Bot, Settings, Zap } from "lucide-react";
 import BottomNav from "./chat/BottomNav";
 import OfflineIndicator from "./chat/OfflineIndicator";
 
 const navItems = [
-  {
-    path: "/inbox",
-    label: "ESO Bot",
-    isEso: true,
-  },
-  {
-    path: "/",
-    icon: MessageSquare,
-    label: "Chat",
-  },
-  {
-    path: "/agent",
-    icon: Bot,
-    label: "Agent",
-  },
-  {
-    path: "/settings",
-    icon: Settings,
-    label: "Einstellungen",
-  },
+  { path: "/inbox",    label: "ESO Bot",       isEso: true },
+  { path: "/",         icon: MessageSquare,    label: "Chat" },
+  { path: "/openclaw", icon: Zap,              label: "OpenClaw" },
+  { path: "/agent",    icon: Bot,              label: "Agent" },
+  { path: "/settings", icon: Settings,         label: "Einstellungen" },
 ];
 
 function Sidebar() {
