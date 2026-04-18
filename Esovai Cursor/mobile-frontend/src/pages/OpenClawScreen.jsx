@@ -1,7 +1,7 @@
 import { useState, useRef } from "react";
 import { Zap, RefreshCw, ExternalLink, Maximize2 } from "lucide-react";
 
-const OPENCLAW_URL = "https://shrimp.esovai.tech/chat?session=main";
+const OPENCLAW_URL = "/openclaw/chat?session=main";
 
 export default function OpenClawScreen() {
   const [loading, setLoading] = useState(true);

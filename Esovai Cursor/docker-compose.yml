@@ -69,6 +69,8 @@ services:
       - /tmp:size=10m,mode=1777
       - /var/cache/nginx:size=50m,mode=1777
       - /var/run:size=1m,mode=0755
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - app-net
 
