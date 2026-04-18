@@ -3,6 +3,7 @@ import path from "path";
 
 const RESULTS_FILE = "/data/jobs.json";
 const INTERVAL_MS  = 6 * 60 * 60 * 1000; // 6 Stunden
+const MAX_RESULTS_PER_PROFILE = 6;
 
 // ─── Arbeitnow API (kostenlos, kein Auth, deutsche Jobs) ─────────────────────
 // Docs: https://arbeitnow.com/api
@@ -191,6 +192,14 @@ function isLocationBad(text) {
   return /\b(berlin|hamburg|frankfurt|köln|cologne|stuttgart|düsseldorf|nürnberg|nuremberg|leipzig|dresden|hannover|bremen|essen|dortmund|landshut|freising)\b/i.test(text);
 }
 
+function isLocationAllowed(profile, locationText, isRemoteRole) {
+  if (isRemoteRole) return true;
+  const text = String(locationText || "");
+  if (!text) return false;
+  if (!profile.locationAllow) return true;
+  return profile.locationAllow.test(text);
+}
+
 // Arbeitnow: 7-Tage-Fenster (dünne Portale; seenUrls-Dedup verhindert Dopplungen)
 const MS_7DAYS = 7 * 24 * 60 * 60 * 1000;
 
@@ -282,13 +291,14 @@ const PROFILES = [
       ["Security Operations",    "",            0, false],
     ],
     searxQueries: [
-      "Junior SOC Analyst Stelle München 2026",
-      "IT Security Analyst Junior Stelle München Quereinsteiger",
-      "Junior IAM Engineer Stelle Remote Deutschland",
-      "Cybersecurity Analyst Junior Deutschland Stelle",
+      "SOC Analyst Stelle Muenchen",
+      "IT Security Analyst Junior Muenchen",
+      "IAM Engineer Junior Remote Deutschland",
+      "Cybersecurity Analyst Junior Deutschland",
     ],
     titleInclude:  /soc|security|sicherheit|iam|isms|cyber|siem|soar|pentest|compliance|analyst/i,
     titleExclude:  /senior|lead|head|architect|principal|manager|direktor|ciso/i,
+    locationAllow: /muenchen|munich|erding|dorfen|markt\s?schwaben|poing|trudering|riem|feldkirchen|vaterstetten|baldham|zorneding|ebersberg|muehldorf|mühldorf|rosenheim/i,
     requireRemote: false,
     systemPrompt:  "Kandidat: IT-Quereinsteiger (kaufm. Hintergrund), Active Directory, Entra ID, Wazuh SIEM, MITRE ATT&CK, IAM, IHK-Zertifizierung Informationssicherheit laufend. KEIN Studium. Ziel: Junior SOC/Security Analyst, IAM/ISMS Junior. Ausschluss: Pflicht-Studium, Senior >3J, reiner Außendienst.",
   },
@@ -302,13 +312,14 @@ const PROFILES = [
       ["Disponent",                  "München", 50, false],
     ],
     searxQueries: [
-      "Sachbearbeiter Innendienst Stelle Erding München 2026",
-      "Kaufmännischer Mitarbeiter Einkauf Stelle Erding Mühldorf",
-      "Disponent ERP Stelle München Großraum",
+      "Sachbearbeiter Innendienst Stelle Erding Muenchen",
+      "Kaufmaennischer Mitarbeiter Einkauf Erding Muehldorf",
+      "Disponent ERP Stelle Muenchen",
     ],
     titleInclude:  /sachbearbeiter|kaufmänn|innendienst|disponent|einkauf|vertriebsmitarbeiter|vertriebskoordinator|auftragsbearbeitung|warenwirtschaft/i,
     // SAP / reine Vertriebs-/Key-Account-Rollen / techn. Vertrieb oft Fehl-Treffer bei Arbeitnow
     titleExclude:  /senior|head|lead|direktor|außendienst|executive|ingenieur|techniker|entwickler|architect|consultant|\bsap\b|s\/4|s4hana|basis[\s-]?consultant|strategic\s+account|key[\s-]?account|account[\s-]?executive|vertriebsingenieur/i,
+    locationAllow: /muenchen|munich|erding|dorfen|markt\s?schwaben|poing|trudering|riem|feldkirchen|vaterstetten|baldham|zorneding|ebersberg|muehldorf|mühldorf|rosenheim/i,
     requireRemote: false,
     systemPrompt:  "Kandidat: Kaufmann im Groß- und Außenhandel, ERP (WW90/AS400), Stammdatenpflege. Ziel: Sachbearbeiter Einkauf/Vertrieb/Innendienst, Disponent. Ausschluss: reiner Außendienst >20%, reines Lager, Callcenter.",
   },
@@ -322,10 +333,10 @@ const PROFILES = [
       ["SaaS Onboarding",     "Deutschland", 0, true],
     ],
     searxQueries: [
-      "IT Support Specialist Remote Stelle Deutschland 2026",
-      "IT Helpdesk Homeoffice Stelle Deutschland Junior",
-      "Junior IT Consultant Remote Stelle Deutschland",
-      "SaaS Onboarding Specialist Remote Stelle Deutschland",
+      "IT Support Specialist Remote Deutschland",
+      "IT Helpdesk Homeoffice Deutschland Junior",
+      "Junior IT Consultant Remote Deutschland",
+      "SaaS Onboarding Specialist Remote Deutschland",
     ],
     titleInclude:  /support.specialist|helpdesk|it.support|service.desk|onboarding.specialist|technical.support/i,
     titleExclude:  /senior|lead|head|\bsap\b|s\/4|basis[\s-]?consultant|erp\.?berater|architect|developer|entwickler/i,
@@ -361,6 +372,7 @@ async function fetchFromBA(profile) {
       if (!titleMatchesProfile(profile, c.title)) continue;
       if (!isWithin7Days(c.publishedAt)) continue;
       if (profile.requireRemote && !c.remote) continue;
+      if (!isLocationAllowed(profile, c.location, c.remote)) continue;
       if (!c.remote && isLocationBad(c.location)) continue;
 
       candidates.push(c);
@@ -439,6 +451,7 @@ async function fetchFromSearXNG(profile, webSearch) {
 
     const remote = isRemote(`${rawTitle} ${parsed.text}`);
     if (profile.requireRemote && !remote) return null;
+    if (!isLocationAllowed(profile, `${rawTitle} ${parsed.text}`, remote)) return null;
     if (!remote && isLocationBad(parsed.text)) return null;
 
     return {
@@ -587,7 +600,7 @@ async function llmFilter(candidates, profile, makeLLMClient) {
       if (rg === 1) kept.push(c);
     }
 
-    if (kept.length >= 12) break;
+    if (kept.length >= MAX_RESULTS_PER_PROFILE) break;
   }
 
   return kept;
@@ -613,7 +626,7 @@ async function runSearch(profile, webSearch, makeLLMClient, seenUrls) {
   if (fresh.length === 0) return "Keine passenden Stellen gefunden.";
 
   // LLM-Filter wenn verfügbar
-  const filtered = makeLLMClient ? await llmFilter(fresh, profile, makeLLMClient) : fresh.slice(0, 12);
+  const filtered = makeLLMClient ? await llmFilter(fresh, profile, makeLLMClient) : fresh.slice(0, MAX_RESULTS_PER_PROFILE);
 
   // Gefilterte (akzeptierte) URLs als "gesehen" markieren
   if (seenUrls) {
