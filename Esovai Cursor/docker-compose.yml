@@ -115,6 +115,27 @@ services:
     networks:
       - app-net
 
+  openclaw-gateway:
+    image: ghcr.io/openclaw/openclaw:latest
+    container_name: openclaw-gateway
+    restart: unless-stopped
+    volumes:
+      - openclaw_config:/home/node/.openclaw
+    networks:
+      - app-net
+
+  cloudflared-openclaw:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared-openclaw
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN_OPENCLAW}
+    depends_on:
+      - openclaw-gateway
+    networks:
+      - app-net
+
 networks:
   app-net:
     driver: bridge
@@ -123,3 +144,4 @@ volumes:
   ollama_data:
   kimi_data:
   eso_workspace:
+  openclaw_config:
