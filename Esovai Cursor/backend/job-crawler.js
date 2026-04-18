@@ -126,7 +126,10 @@ function sanitizeText(input, maxLen = 1400) {
 
 /** Kimi K2.5 <think>…</think>-Blöcke entfernen */
 const stripThink = (s) =>
-  String(s || "").replace(/<think>[\s\S]*?<\/think>/gi, "").replace(/<\/?think>/gi, "").trim();
+  String(s || "")
+    .replace(/<redacted_thinking>[\s\S]*?<\/redacted_thinking>/gi, "")
+    .replace(/<\/?think>/gi, "")
+    .trim();
 
 /**
  * Binäre Entscheidung aus LLM-Rohtext extrahieren.
