@@ -714,8 +714,6 @@ async function runSearch(profile, webSearch, makeLLMClient, seenUrls) {
   // Gefilterte (akzeptierte) URLs als "gesehen" markieren
   if (seenUrls) {
     for (const c of filtered) seenUrls.add(canonicalUrl(c.url));
-    // Auch verworfene Kandidaten als gesehen markieren → nicht nochmal prüfen
-    for (const c of fresh)    seenUrls.add(canonicalUrl(c.url));
   }
 
   if (filtered.length === 0) return "Keine passenden Stellen gefunden.";
@@ -724,12 +722,18 @@ async function runSearch(profile, webSearch, makeLLMClient, seenUrls) {
 }
 
 // ─── Store ────────────────────────────────────────────────────────────────────
-let jobStore = { lastRun: null, results: {}, running: false, seenUrls: [] };
+// seenUrls: { [canonicalUrl]: lastSeenIso }
+let jobStore = { lastRun: null, results: {}, running: false, seenUrls: {} };
+const SEEN_TTL_MS = 24 * 60 * 60 * 1000;
 
 async function loadPersistedResults() {
   try {
     const loaded = JSON.parse(await fs.readFile(RESULTS_FILE, "utf8"));
-    jobStore = { seenUrls: [], ...loaded };
+    // Migration: alte Array-Form komplett verwerfen (verhindert "alles schon gesehen")
+    const migratedSeen = (loaded && loaded.seenUrls && !Array.isArray(loaded.seenUrls) && typeof loaded.seenUrls === "object")
+      ? loaded.seenUrls
+      : {};
+    jobStore = { seenUrls: migratedSeen, ...loaded, seenUrls: migratedSeen };
   } catch {}
 }
 
@@ -746,8 +750,18 @@ export async function crawlJobs(webSearch, makeLLMClient) {
   jobStore.running = true;
   jobStore.lastRun = new Date().toISOString();
 
-  // seenUrls als Set für O(1)-Lookup; maximal 2000 Einträge behalten
-  const seenSet = new Set(Array.isArray(jobStore.seenUrls) ? jobStore.seenUrls : []);
+  // seenUrls (TTL 24h) als Set für O(1)-Lookup
+  const now = Date.now();
+  const seenMap = (jobStore.seenUrls && typeof jobStore.seenUrls === "object" && !Array.isArray(jobStore.seenUrls))
+    ? { ...jobStore.seenUrls }
+    : {};
+
+  for (const [url, iso] of Object.entries(seenMap)) {
+    const t = new Date(iso).getTime();
+    if (!Number.isFinite(t) || now - t > SEEN_TTL_MS) delete seenMap[url];
+  }
+
+  const seenSet = new Set(Object.keys(seenMap));
 
   for (const profile of PROFILES) {
     jobStore.results[profile.id] = { label: profile.label, updatedAt: new Date().toISOString(), status: "running", content: "" };
@@ -761,8 +775,20 @@ export async function crawlJobs(webSearch, makeLLMClient) {
     };
   }
 
-  // seenUrls-Set zurück in Array (auf 2000 kappen)
-  jobStore.seenUrls = [...seenSet].slice(-2000);
+  // Nur wirklich akzeptierte Treffer als "gesehen" markieren (nicht alle verworfenen)
+  for (const p of Object.values(jobStore.results || {})) {
+    const lines = String(p?.content || "").split("\n").filter((l) => l.includes("|"));
+    for (const line of lines) {
+      const parts = line.split("|");
+      const url = canonicalUrl((parts[4] || "").trim());
+      if (url) seenMap[url] = new Date().toISOString();
+    }
+  }
+
+  // auf 2000 Einträge kappen (älteste zuerst entfernen)
+  const entries = Object.entries(seenMap).sort((a, b) => new Date(a[1]).getTime() - new Date(b[1]).getTime());
+  const trimmed = entries.slice(Math.max(0, entries.length - 2000));
+  jobStore.seenUrls = Object.fromEntries(trimmed);
   jobStore.running = false;
   await saveResults();
   console.log(`[JOB-CRAWLER] Abgeschlossen: ${jobStore.lastRun}`);
