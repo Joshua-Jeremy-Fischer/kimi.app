@@ -1,9 +1,13 @@
 use_default_settings:
   engines:
-    # duckduckgo: häufig CAPTCHA bei Server-IP → nur Google/Bing
+    # Google/Bing: blocken Server-IPs häufig via CAPTCHA
+    # Startpage, Qwant, Brave: robuster für Server-Deployments
     keep_only:
       - google
       - bing
+      - startpage
+      - qwant
+      - brave
 
 general:
   instance_name: "KimiSearch"
