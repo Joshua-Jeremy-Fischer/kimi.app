@@ -1,7 +1,7 @@
 import { useState, useRef } from "react";
 import { Zap, RefreshCw, ExternalLink } from "lucide-react";
 
-const OPENCLAW_URL = "/openclaw/";
+const OPENCLAW_URL = "https://shrimp.esovai.tech";
 
 export default function OpenClawScreen() {
   const [loading, setLoading] = useState(true);
@@ -25,7 +25,7 @@ export default function OpenClawScreen() {
           </div>
           <div>
             <span className="text-[14px] font-semibold">Ollama Chat</span>
-            <span className="ml-2 text-[10px] text-muted-foreground">Open WebUI</span>
+            <span className="ml-2 text-[10px] text-muted-foreground">shrimp.esovai.tech</span>
           </div>
         </div>
         <div className="flex items-center gap-1">
@@ -37,7 +37,7 @@ export default function OpenClawScreen() {
             <RefreshCw className={`w-4 h-4 text-muted-foreground ${loading ? "animate-spin" : ""}`} />
           </button>
           <a
-            href="https://remote.esovai.tech/openclaw/"
+            href="https://shrimp.esovai.tech"
             target="_blank"
             rel="noopener noreferrer"
             className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-full active:bg-accent"
@@ -76,7 +76,7 @@ export default function OpenClawScreen() {
                 Erneut versuchen
               </button>
               <a
-                href="https://remote.esovai.tech/openclaw/"
+                href="https://shrimp.esovai.tech"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="px-4 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-medium flex items-center gap-1.5 active:opacity-70"
