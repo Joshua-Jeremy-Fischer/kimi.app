@@ -127,12 +127,9 @@ services:
     restart: unless-stopped
     environment:
       OLLAMA_BASE_URL: "http://ollama:11434"
-      # Keine eigene Auth — nginx übernimmt Token-Gate
       WEBUI_AUTH: "false"
-      # iframing erlauben (nginx proxy_hide_header greift zusätzlich)
       CORS_ALLOW_ORIGIN: "*"
-    ports:
-      - "127.0.0.1:18789:8080"
+    # Kein direkter Host-Port — läuft nur intern, webui-proxy sitzt davor
     volumes:
       - open_webui_data:/app/backend/data
     cap_drop: [ALL]
@@ -145,6 +142,20 @@ services:
       - app-net
     depends_on:
       - ollama
+
+  # Nginx-Proxy vor Open WebUI — strippt X-Frame-Options für iframe-Embedding
+  webui-proxy:
+    image: nginx:alpine
+    container_name: webui-proxy
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:18789:80"
+    volumes:
+      - ./webui-proxy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - app-net
+    depends_on:
+      - open-webui
 
   langchain-agent:
     build: ./langchain-agent
