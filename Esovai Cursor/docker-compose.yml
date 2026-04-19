@@ -121,18 +121,15 @@ services:
     networks:
       - app-net
 
-  openclaw-gateway:
-    image: ghcr.io/openclaw/openclaw:latest
-    container_name: openclaw-gateway
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
     restart: unless-stopped
-    env_file: .env        # ANTHROPIC_API_KEY oder OPENAI_API_KEY aus .env
     environment:
-      DISABLE_FRAME_OPTIONS: "true"
-      DISABLE_CSP: "true"
-    # Persistente Config (API-Keys, Agent-State) überleben Container-Neustarts
+      OLLAMA_BASE_URL: "http://ollama:11434"
+      WEBUI_AUTH: "false"
     volumes:
-      - openclaw_data:/home/node/.openclaw
-    # Kein direkter Host-Port — webui-proxy sitzt davor und strippt X-Frame-Options
+      - open_webui_data:/app/backend/data
     cap_drop: [ALL]
     cap_add: [NET_BIND_SERVICE]
     security_opt:
@@ -141,8 +138,10 @@ services:
       - /tmp:size=10m,mode=1777
     networks:
       - app-net
+    depends_on:
+      - ollama
 
-  # Nginx-Proxy vor OpenClaw — strippt X-Frame-Options für iframe-Embedding
+  # Nginx-Proxy vor Open WebUI — strippt X-Frame-Options für iframe-Embedding
   webui-proxy:
     image: nginx:alpine
     container_name: webui-proxy
@@ -154,7 +153,7 @@ services:
     networks:
       - app-net
     depends_on:
-      - openclaw-gateway
+      - open-webui
 
   langchain-agent:
     build: ./langchain-agent
@@ -182,4 +181,4 @@ volumes:
   ollama_data:
   kimi_data:
   eso_workspace:
-  openclaw_data:
+  open_webui_data:
